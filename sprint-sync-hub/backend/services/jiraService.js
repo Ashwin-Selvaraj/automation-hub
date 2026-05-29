@@ -49,6 +49,7 @@ function jiraError(err, context) {
 
 /**
  * Fetches issues in a project that were updated within the sprint date range.
+ * Uses /search/jql (the current Jira Cloud endpoint — /search is deprecated).
  * @param {string} projectKey - Jira project key (e.g. "QG")
  * @param {string} startDate - YYYY-MM-DD
  * @param {string} endDate - YYYY-MM-DD
@@ -58,8 +59,8 @@ async function getSprintIssues(projectKey, startDate, endDate) {
   try {
     const client = getClient();
     const jql = `project = "${projectKey}" AND updated >= "${startDate}" AND updated <= "${endDate}" ORDER BY updated DESC`;
-    const res = await client.get('/search', {
-      params: { jql, maxResults: 100, fields: 'summary,status,assignee,duedate,priority' },
+    const res = await client.get('/search/jql', {
+      params: { jql, maxResults: 100, fields: 'summary,status,assignee,duedate,priority,issuetype' },
     });
 
     return (res.data.issues || []).map((issue) => ({
@@ -67,7 +68,7 @@ async function getSprintIssues(projectKey, startDate, endDate) {
       summary: issue.fields.summary,
       status: issue.fields.status?.name || 'Unknown',
       assigneeEmail: issue.fields.assignee?.emailAddress || null,
-      assigneeName: issue.fields.assignee?.displayName || null,
+      assigneeName: issue.fields.assignee?.displayName || 'Unassigned',
       duedate: issue.fields.duedate || null,
       priority: issue.fields.priority?.name || 'Medium',
     }));
@@ -141,7 +142,7 @@ async function getOverdueIssues(projectKey) {
     const client = getClient();
     const today = new Date().toISOString().split('T')[0];
     const jql = `project = "${projectKey}" AND duedate < "${today}" AND status != Done ORDER BY duedate ASC`;
-    const res = await client.get('/search', {
+    const res = await client.get('/search/jql', {
       params: { jql, maxResults: 50, fields: 'summary,status,assignee,duedate,priority' },
     });
 
@@ -154,7 +155,7 @@ async function getOverdueIssues(projectKey) {
         summary: issue.fields.summary,
         status: issue.fields.status?.name || 'Unknown',
         assigneeEmail: issue.fields.assignee?.emailAddress || null,
-        assigneeName: issue.fields.assignee?.displayName || null,
+        assigneeName: issue.fields.assignee?.displayName || 'Unassigned',
         duedate: issue.fields.duedate,
         daysOverdue,
         priority: issue.fields.priority?.name || 'Medium',
