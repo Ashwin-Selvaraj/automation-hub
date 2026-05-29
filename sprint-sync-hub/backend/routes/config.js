@@ -107,11 +107,37 @@ router.get('/health', async (req, res) => {
 /**
  * GET /api/config/env-status
  * Returns which env vars are set. Secrets are masked — never sent in full.
- * Non-secret values (channel ID, email, URLs, project key) are returned as-is
- * so the frontend can pre-fill editable fields.
+ * Non-secret values are returned as-is so the frontend can pre-fill editable fields.
+ * Covers every variable in .env.example.
  */
 router.get('/env-status', (req, res) => {
   const e = process.env;
+
+  // Parse team members with the same lenient logic as sprintConfig
+  let parsedTeam = [];
+  let teamParseError = false;
+  const rawTeam = e.TEAM_MEMBERS || '';
+  if (rawTeam.trim()) {
+    try {
+      const direct = JSON.parse(rawTeam);
+      parsedTeam = Array.isArray(direct) ? direct : [];
+    } catch {
+      try {
+        const cleaned = rawTeam
+          .replace(/\\\s*[\r\n]+\s*/g, '')
+          .replace(/[\r\n\t]/g, ' ')
+          .replace(/,\s*([}\]])/g, '$1')
+          .trim();
+        const fallback = JSON.parse(cleaned);
+        parsedTeam = Array.isArray(fallback) ? fallback : [];
+      } catch {
+        teamParseError = true;
+        parsedTeam = [];
+      }
+    }
+  }
+  const teamIsPlaceholder = parsedTeam.some((m) => m.id && m.id.startsWith('U00000000'));
+
   res.json({
     slack: {
       botToken:      { set: !!e.SLACK_BOT_TOKEN,      secret: true,  preview: e.SLACK_BOT_TOKEN      ? maskSecret(e.SLACK_BOT_TOKEN)      : null },
@@ -119,38 +145,63 @@ router.get('/env-status', (req, res) => {
       signingSecret: { set: !!e.SLACK_SIGNING_SECRET, secret: true,  preview: e.SLACK_SIGNING_SECRET ? maskSecret(e.SLACK_SIGNING_SECRET) : null },
     },
     jira: {
-      email:      { set: !!e.JIRA_EMAIL,      secret: false, value:   e.JIRA_EMAIL      || null },
-      apiToken:   { set: !!e.JIRA_API_TOKEN,  secret: true,  preview: e.JIRA_API_TOKEN  ? maskSecret(e.JIRA_API_TOKEN)  : null },
-      siteUrl:    { set: !!e.JIRA_SITE_URL,   secret: false, value:   e.JIRA_SITE_URL   || null },
-      projectKey: { set: !!e.JIRA_PROJECT_KEY, secret: false, value: e.JIRA_PROJECT_KEY || null },
+      email:      { set: !!e.JIRA_EMAIL,       secret: false, value:   e.JIRA_EMAIL       || null },
+      apiToken:   { set: !!e.JIRA_API_TOKEN,   secret: true,  preview: e.JIRA_API_TOKEN   ? maskSecret(e.JIRA_API_TOKEN)   : null },
+      siteUrl:    { set: !!e.JIRA_SITE_URL,    secret: false, value:   e.JIRA_SITE_URL    || null },
+      cloudId:    { set: !!e.JIRA_CLOUD_ID,    secret: false, value:   e.JIRA_CLOUD_ID    || null },
+      projectKey: { set: !!e.JIRA_PROJECT_KEY, secret: false, value:   e.JIRA_PROJECT_KEY || null },
     },
     claude: {
       apiKey: { set: !!e.ANTHROPIC_API_KEY, secret: true, preview: e.ANTHROPIC_API_KEY ? maskSecret(e.ANTHROPIC_API_KEY) : null },
+    },
+    schedule: {
+      timezone:       { set: !!e.TIMEZONE,        secret: false, value: e.TIMEZONE        || null },
+      eodCheckTime:   { set: !!e.EOD_CHECK_TIME,  secret: false, value: e.EOD_CHECK_TIME  || null },
+      reportDay:      { set: !!e.REPORT_DAY,      secret: false, value: e.REPORT_DAY      || null },
+      reportTime:     { set: !!e.REPORT_TIME,     secret: false, value: e.REPORT_TIME     || null },
+      managerSlackId: { set: !!e.MANAGER_SLACK_ID, secret: false, value: e.MANAGER_SLACK_ID || null },
+    },
+    team: {
+      // Returns the parsed members array (non-secret) so the Team tab can pre-populate.
+      count:         parsedTeam.length,
+      members:       parsedTeam,
+      isPlaceholder: teamIsPlaceholder,
+      rawSet:        !!e.TEAM_MEMBERS,
+      parseError:    teamParseError,   // true when TEAM_MEMBERS is set but unparseable
     },
   });
 });
 
 /**
  * POST /api/config/connections
- * Updates non-secret connection values in the runtime environment.
- * Secrets (tokens, keys) must always be changed in .env + restart.
- * Body: { channelId?, jiraEmail?, jiraSiteUrl?, projectKey? }
+ * Updates any non-secret env value in the runtime config (no restart needed).
+ * Secrets (tokens, API keys) must still be changed in .env + restart.
+ * Body: any subset of the non-secret fields below.
  */
 router.post('/connections', (req, res) => {
   try {
-    const { channelId, jiraEmail, jiraSiteUrl, projectKey } = req.body;
-    if (channelId)   process.env.SLACK_CHANNEL_ID   = channelId;
-    if (jiraEmail)   process.env.JIRA_EMAIL          = jiraEmail;
-    if (jiraSiteUrl) process.env.JIRA_SITE_URL       = jiraSiteUrl;
-    if (projectKey)  process.env.JIRA_PROJECT_KEY    = projectKey;
+    const {
+      channelId, jiraEmail, jiraSiteUrl, jiraCloudId, projectKey,
+      timezone, eodCheckTime, reportDay, reportTime, managerSlackId,
+    } = req.body;
 
-    // Also update sprint config store so getSprintConfig() stays consistent
-    if (projectKey) setSprintConfig({ projectKey });
+    // Propagate every provided value into runtime env + sprintConfig overrides
+    const updates = {};
+    if (channelId     != null) { process.env.SLACK_CHANNEL_ID   = channelId;     updates.channelId = channelId; }
+    if (jiraEmail     != null) { process.env.JIRA_EMAIL          = jiraEmail;     updates.jiraEmail = jiraEmail; }
+    if (jiraSiteUrl   != null) { process.env.JIRA_SITE_URL       = jiraSiteUrl;   updates.jiraSiteUrl = jiraSiteUrl; }
+    if (jiraCloudId   != null) { process.env.JIRA_CLOUD_ID       = jiraCloudId;   updates.jiraCloudId = jiraCloudId; }
+    if (projectKey    != null) { updates.projectKey    = projectKey; }
+    if (timezone      != null) { updates.timezone      = timezone; }
+    if (eodCheckTime  != null) { updates.eodCheckTime  = eodCheckTime; }
+    if (reportDay     != null) { updates.reportDay     = reportDay; }
+    if (reportTime    != null) { updates.reportTime    = reportTime; }
+    if (managerSlackId != null){ updates.managerSlackId = managerSlackId; }
 
-    res.json({
-      ok: true,
-      updated: { channelId, jiraEmail, jiraSiteUrl, projectKey },
-    });
+    // Batch all schedule + sprint-config overrides through sprintConfig
+    if (Object.keys(updates).length) setSprintConfig(updates);
+
+    res.json({ ok: true, updated: updates });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

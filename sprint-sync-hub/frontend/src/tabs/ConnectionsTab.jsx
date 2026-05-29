@@ -241,6 +241,18 @@ const SECTIONS = [
         hint: 'Your Atlassian domain, e.g. https://yourcompany.atlassian.net — no trailing slash',
       },
       {
+        key: 'jira.cloudId',
+        label: 'Cloud ID',
+        secret: false,
+        dataPath: ['jira', 'cloudId'],
+        saveKey: 'jiraCloudId',
+        hint: 'UUID for your Atlassian cloud instance — used by some Jira REST v3 endpoints',
+        steps: [
+          'Go to https://yourcompany.atlassian.net/_edge/tenant_info',
+          'Copy the "cloudId" value from the JSON response',
+        ],
+      },
+      {
         key: 'jira.projectKey',
         label: 'Project Key',
         secret: false,
@@ -262,6 +274,53 @@ const SECTIONS = [
         dataPath: ['claude', 'apiKey'],
         hint: 'Used for standup analysis and report generation. Model: claude-sonnet-4-20250514',
         steps: ['Go to console.anthropic.com', 'API Keys → Create Key', 'Copy the sk-ant-… value immediately — it is shown only once'],
+      },
+    ],
+  },
+  {
+    id: 'schedule',
+    icon: '🕐',
+    title: 'Schedule & Notifications',
+    fields: [
+      {
+        key: 'schedule.timezone',
+        label: 'Timezone',
+        secret: false,
+        dataPath: ['schedule', 'timezone'],
+        saveKey: 'timezone',
+        hint: 'IANA timezone for all cron jobs, e.g. Asia/Kolkata, America/New_York, Europe/London',
+      },
+      {
+        key: 'schedule.eodCheckTime',
+        label: 'End-of-Day Check Time',
+        secret: false,
+        dataPath: ['schedule', 'eodCheckTime'],
+        saveKey: 'eodCheckTime',
+        hint: 'HH:MM — when to check for missing standup updates each weekday (e.g. 17:30)',
+      },
+      {
+        key: 'schedule.reportDay',
+        label: 'Weekly Report Day',
+        secret: false,
+        dataPath: ['schedule', 'reportDay'],
+        saveKey: 'reportDay',
+        hint: 'Day of week to post the sprint report, e.g. Friday',
+      },
+      {
+        key: 'schedule.reportTime',
+        label: 'Weekly Report Time',
+        secret: false,
+        dataPath: ['schedule', 'reportTime'],
+        saveKey: 'reportTime',
+        hint: 'HH:MM — time on the report day to post the weekly report (e.g. 17:00)',
+      },
+      {
+        key: 'schedule.managerSlackId',
+        label: 'Manager Slack ID',
+        secret: false,
+        dataPath: ['schedule', 'managerSlackId'],
+        saveKey: 'managerSlackId',
+        hint: 'Optional — Slack user ID of the manager who receives a DM copy of weekly reports',
       },
     ],
   },
@@ -398,6 +457,8 @@ export default function ConnectionsTab() {
         const setCount   = sectionSetCount(section);
         const totalCount = section.fields.length;
         const allSet     = setCount === totalCount;
+        // Schedule section has no live connection test — only Slack/Jira/Claude do
+        const hasHealthCheck = ['slack', 'jira', 'claude'].includes(section.id);
         const sectionOk  = health?.[section.id] ?? false;
 
         return (
@@ -426,7 +487,7 @@ export default function ConnectionsTab() {
                   {setCount}/{totalCount} configured
                 </span>
               </div>
-              <ConnectionBadge ok={sectionOk} loading={false} />
+              {hasHealthCheck && <ConnectionBadge ok={sectionOk} loading={false} />}
             </div>
 
             {/* Fields */}
