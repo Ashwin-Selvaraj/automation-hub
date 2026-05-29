@@ -15,14 +15,20 @@ const AUTOMATIONS = [
   { name: 'Weekly Report',        desc: 'Posts AI sprint summary to the Slack channel. Runs on the configured report day.' },
 ];
 
-function MetricCard({ label, value, loading }) {
+function MetricCard({ label, value, loading, tint }) {
+  const bg     = tint ? tint.bg     : colors.white;
+  const border = tint ? tint.border : colors.gray200;
+  const valCol = tint ? tint.text   : colors.gray900;
   return (
-    <Card style={{ marginBottom: 0 }}>
-      <div style={{ fontSize: 28, fontWeight: 600, color: colors.gray900, fontFamily: fonts.body, lineHeight: 1.2 }}>
+    <div style={{
+      background: bg, border: `1px solid ${border}`, borderRadius: 8,
+      padding: '20px 20px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+    }}>
+      <div style={{ fontSize: 28, fontWeight: 700, color: valCol, fontFamily: fonts.body, lineHeight: 1.2 }}>
         {loading ? <Spinner size={24} /> : value ?? '—'}
       </div>
-      <div style={{ fontSize: 12, color: colors.gray400, marginTop: 6, fontFamily: fonts.body }}>{label}</div>
-    </Card>
+      <div style={{ fontSize: 12, color: valCol, opacity: 0.65, marginTop: 6, fontFamily: fonts.body }}>{label}</div>
+    </div>
   );
 }
 
@@ -100,10 +106,10 @@ export default function OverviewTab({ config }) {
   const missingToday = Math.max(0, totalM - postedToday);
 
   const metrics = [
-    { label: 'Messages This Sprint', value: messages.length },
-    { label: 'Tasks in Jira',        value: taskCount       },
-    { label: 'Posted Today',         value: postedToday     },
-    { label: 'Missing Today',        value: missingToday    },
+    { label: 'Messages This Sprint', value: messages.length, tint: colors.tintBlue  },
+    { label: 'Tasks in Jira',        value: taskCount,       tint: colors.tintGreen  },
+    { label: 'Posted Today',         value: postedToday,     tint: colors.tintAmber  },
+    { label: 'Missing Today',        value: missingToday,    tint: colors.tintRed    },
   ];
 
   return (
@@ -115,7 +121,7 @@ export default function OverviewTab({ config }) {
 
       {/* Metrics */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-        {metrics.map((m) => <MetricCard key={m.label} label={m.label} value={m.value} loading={loading} />)}
+        {metrics.map((m) => <MetricCard key={m.label} label={m.label} value={m.value} loading={loading} tint={m.tint} />)}
       </div>
 
       {/* Activity log */}

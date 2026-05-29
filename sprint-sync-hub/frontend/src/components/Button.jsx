@@ -38,7 +38,7 @@ export default function Button({
   let variantStyle = {};
   if (variant === 'primary') {
     variantStyle = {
-      background: disabled ? '#93C5FD' : hovered ? '#1D4ED8' : colors.blue600,
+      background: disabled ? '#8FA3C8' : hovered ? colors.blue700 : colors.blue600,
       color: colors.white,
       cursor: disabled ? 'not-allowed' : 'pointer',
       opacity: disabled ? 0.7 : 1,

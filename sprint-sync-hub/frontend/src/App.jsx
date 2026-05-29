@@ -113,7 +113,12 @@ export default function App() {
               ☰
             </button>
           )}
-          <span style={{ fontSize: 15, fontWeight: 600, color: colors.gray900 }}>Sprint-Sync</span>
+          {/* Shield logo mark */}
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+            <path d="M12 2L4 5.5V11c0 5.25 3.5 9.65 8 11 4.5-1.35 8-5.75 8-11V5.5L12 2z" fill={colors.blue600} />
+            <path d="M8.5 11.5l2.5 2.5 4.5-4.5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span style={{ fontSize: 15, fontWeight: 700, color: colors.blue600, letterSpacing: '-0.01em' }}>Sprint-Sync</span>
           <span style={{ color: colors.gray200, fontSize: 14, padding: '0 2px' }}>·</span>
           <span style={{ fontSize: 14, color: colors.gray400 }}>{config?.sprintName || '—'}</span>
         </div>

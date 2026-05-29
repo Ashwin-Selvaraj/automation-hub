@@ -1,3 +1,9 @@
+/**
+ * Design tokens — Makkal Saatchi-inspired palette.
+ * Primary: deep navy (#0D2166) — the same authoritative navy used across
+ * the Makkal Saatchi identity for buttons, active states, and headings.
+ * Accent blues, status colours, and gray scale complete the system.
+ */
 export const theme = {
   colors: {
     white:   '#FFFFFF',
@@ -10,9 +16,23 @@ export const theme = {
     gray700: '#374151',
     gray900: '#111827',
 
-    blue600: '#2563EB',
-    blue50:  '#EFF6FF',
+    // Makkal Saatchi primary — deep civic navy
+    blue600: '#0D2166',
+    blue700: '#091852',   // hover / pressed
+    blue50:  '#EEF2FF',   // selected row, tint backgrounds
 
+    // Medium blue for links and secondary accents
+    linkBlue: '#2563EB',
+
+    // Category tint palette (mirrors Makkal Saatchi category card colours)
+    tintBlue:   { bg: '#EEF2FF', text: '#0D2166', border: '#C7D2FE' },
+    tintGreen:  { bg: '#F0FDF4', text: '#15803D', border: '#86EFAC' },
+    tintAmber:  { bg: '#FFFBEB', text: '#B45309', border: '#FDE68A' },
+    tintRed:    { bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' },
+    tintPurple: { bg: '#F5F3FF', text: '#6D28D9', border: '#DDD6FE' },
+    tintOrange: { bg: '#FFF7ED', text: '#C2410C', border: '#FDBA74' },
+
+    // Semantic status colours
     green600: '#16A34A',
     green50:  '#F0FDF4',
 
@@ -36,16 +56,17 @@ export const theme = {
 
   shadows: {
     card:     '0 1px 3px rgba(0,0,0,0.08)',
-    dropdown: '0 4px 12px rgba(0,0,0,0.10)',
+    dropdown: '0 4px 12px rgba(0,0,0,0.12)',
   },
 };
 
-// Shared style helpers (use these rather than hardcoding values in components)
+// ─── Shared style helpers ─────────────────────────────────────────────────────
+
 export const styles = {
   pageTitle: {
-    fontSize: 20,
-    fontWeight: 600,
-    color: theme.colors.gray900,
+    fontSize: 22,
+    fontWeight: 700,
+    color: theme.colors.blue600,      // headings in Makkal Saatchi navy
     fontFamily: theme.fonts.body,
     lineHeight: 1.3,
   },
