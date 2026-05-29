@@ -1,141 +1,150 @@
 import React, { useState, useEffect } from 'react';
-import { COLORS, FONTS } from './config.js';
+import { theme } from './theme.js';
 import { getConfig, getHealth } from './api.js';
-import SprintTab from './tabs/SprintTab.jsx';
+import OverviewTab    from './tabs/OverviewTab.jsx';
 import ConnectionsTab from './tabs/ConnectionsTab.jsx';
-import TeamTab from './tabs/TeamTab.jsx';
-import SyncTab from './tabs/SyncTab.jsx';
-import JiraTab from './tabs/JiraTab.jsx';
-import ReportTab from './tabs/ReportTab.jsx';
-import HowItWorksTab from './tabs/HowItWorksTab.jsx';
+import TeamTab        from './tabs/TeamTab.jsx';
+import SprintTab      from './tabs/SprintTab.jsx';
+import SyncTab        from './tabs/SyncTab.jsx';
+import ReportTab      from './tabs/ReportTab.jsx';
 
-const TABS = [
-  { id: 'sprint', label: '⚡ Sprint' },
-  { id: 'connections', label: '🔌 Connections' },
-  { id: 'team', label: '👥 Team' },
-  { id: 'sync', label: '🔄 Sync' },
-  { id: 'jira', label: '📋 Jira' },
-  { id: 'report', label: '📊 Report' },
-  { id: 'howto', label: '📖 How It Works' },
+const { colors, fonts } = theme;
+
+const NAV = [
+  { id: 'overview',    label: 'Overview'     },
+  { id: 'connections', label: 'Connections'  },
+  { id: 'team',        label: 'Team'         },
+  { id: 'sprint',      label: 'Sprint'       },
+  { id: 'sync',        label: 'Sync'         },
+  { id: 'report',      label: 'Report'       },
 ];
 
-function StatusPill({ health, loading }) {
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: FONTS.mono, fontSize: 12, color: COLORS.muted }}>
-      <Spinner size={12} /> Checking...
-    </div>
-  );
-  if (!health) return null;
-  const all = health.slack && health.jira && health.claude;
-  const some = health.slack || health.jira || health.claude;
-  const color = all ? COLORS.success : some ? COLORS.warning : COLORS.error;
-  const label = all ? 'All Connected' : some ? 'Partial' : 'Disconnected';
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 20, padding: '6px 14px' }}>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
-      <span style={{ fontFamily: FONTS.mono, fontSize: 12, color: COLORS.text }}>{label}</span>
-    </div>
-  );
+function useWindowWidth() {
+  const [w, setW] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const fn = () => setW(window.innerWidth);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return w;
 }
 
-export function Spinner({ size = 20, color = COLORS.primary }) {
+function NavItem({ id, label, active, onClick }) {
+  const [hovered, setHovered] = useState(false);
+  const isActive = active === id;
   return (
-    <div style={{
-      width: size, height: size,
-      border: `2px solid ${COLORS.border}`,
-      borderTopColor: color,
-      borderRadius: '50%',
-      animation: 'spin 0.7s linear infinite',
-      flexShrink: 0,
-    }} />
+    <button
+      onClick={() => onClick(id)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'block', width: '100%', textAlign: 'left',
+        background: isActive ? colors.blue50 : hovered ? colors.gray100 : 'transparent',
+        color: isActive ? colors.blue600 : colors.gray600,
+        border: 'none',
+        borderLeft: `2px solid ${isActive ? colors.blue600 : 'transparent'}`,
+        padding: '0 16px', height: 36,
+        fontSize: 13, fontWeight: 500, fontFamily: fonts.body,
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('sprint');
-  const [config, setConfig] = useState(null);
-  const [health, setHealth] = useState(null);
-  const [healthLoading, setHealthLoading] = useState(true);
+  const [active, setActive]         = useState('overview');
+  const [config, setConfig]         = useState(null);
+  const [health, setHealth]         = useState(null);
+  const [healthLoading, setHL]      = useState(true);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const width   = useWindowWidth();
+  const mobile  = width < 768;
 
   useEffect(() => {
     getConfig().then(setConfig).catch(console.error);
     getHealth()
       .then(setHealth)
       .catch(() => setHealth({ slack: false, jira: false, claude: false, errors: {} }))
-      .finally(() => setHealthLoading(false));
+      .finally(() => setHL(false));
   }, []);
 
+  const all      = health?.slack && health?.jira && health?.claude;
+  const dotColor = healthLoading ? colors.gray400 : all ? colors.green600 : colors.red600;
   const tabProps = { config, setConfig };
 
-  return (
-    <div style={{ minHeight: '100vh', background: COLORS.bg, display: 'flex', flexDirection: 'column' }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+  function navigate(id) { setActive(id); if (mobile) setMobileOpen(false); }
 
-      {/* Header */}
-      <header style={{
-        background: COLORS.surface,
-        borderBottom: `1px solid ${COLORS.border}`,
-        padding: '16px 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-      }}>
-        <div>
-          <h1 style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 800, color: COLORS.text, letterSpacing: '-0.02em' }}>
-            Sprint-Sync Hub
-          </h1>
-          <p style={{ fontFamily: FONTS.mono, fontSize: 12, color: COLORS.muted, marginTop: 2 }}>
-            {config ? `${config.sprintName} · ${config.startDate} → ${config.endDate}` : 'Loading sprint info…'}
-          </p>
-        </div>
-        <StatusPill health={health} loading={healthLoading} />
-      </header>
-
-      {/* Tab bar */}
-      <div style={{
-        background: COLORS.surface,
-        borderBottom: `1px solid ${COLORS.border}`,
-        padding: '0 32px',
-        display: 'flex',
-        gap: 4,
-        overflowX: 'auto',
-      }}>
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{
-              background: activeTab === tab.id ? COLORS.card : 'transparent',
-              color: activeTab === tab.id ? COLORS.text : COLORS.muted,
-              border: 'none',
-              borderBottom: activeTab === tab.id ? `2px solid ${COLORS.primary}` : '2px solid transparent',
-              padding: '12px 18px',
-              fontFamily: FONTS.body,
-              fontSize: 14,
-              fontWeight: activeTab === tab.id ? 600 : 400,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              transition: 'all 0.15s',
-            }}
-          >
-            {tab.label}
-          </button>
+  const sidebar = (
+    <nav style={{
+      width: mobile ? 220 : 220, background: colors.gray50,
+      borderRight: `1px solid ${colors.gray200}`,
+      display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+      padding: '16px 0',
+      position: mobile ? 'fixed' : 'sticky',
+      top: 56, height: 'calc(100vh - 56px)',
+      zIndex: mobile ? 150 : 1,
+      flexShrink: 0, overflowY: 'auto',
+    }}>
+      <div>
+        {NAV.map((item) => (
+          <NavItem key={item.id} id={item.id} label={item.label} active={active} onClick={navigate} />
         ))}
       </div>
+      <div style={{ padding: '0 16px 8px', fontSize: 11, color: colors.gray400, fontFamily: fonts.body }}>
+        v1.0.0
+      </div>
+    </nav>
+  );
 
-      {/* Tab content */}
-      <main style={{ flex: 1, padding: '32px', maxWidth: 1200, width: '100%', margin: '0 auto' }}>
-        {activeTab === 'sprint' && <SprintTab {...tabProps} />}
-        {activeTab === 'connections' && <ConnectionsTab {...tabProps} />}
-        {activeTab === 'team' && <TeamTab {...tabProps} />}
-        {activeTab === 'sync' && <SyncTab {...tabProps} />}
-        {activeTab === 'jira' && <JiraTab {...tabProps} />}
-        {activeTab === 'report' && <ReportTab {...tabProps} />}
-        {activeTab === 'howto' && <HowItWorksTab />}
-      </main>
+  return (
+    <div style={{ minHeight: '100vh', background: colors.gray50, fontFamily: fonts.body }}>
+      {/* Top bar */}
+      <div style={{
+        height: 56, background: colors.white, borderBottom: `1px solid ${colors.gray200}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 24px', position: 'sticky', top: 0, zIndex: 200,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {mobile && (
+            <button onClick={() => setMobileOpen(!mobileOpen)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: colors.gray600, padding: '4px 8px 4px 0', lineHeight: 1 }}>
+              ☰
+            </button>
+          )}
+          <span style={{ fontSize: 15, fontWeight: 600, color: colors.gray900 }}>Sprint-Sync</span>
+          <span style={{ color: colors.gray200, fontSize: 14, padding: '0 2px' }}>·</span>
+          <span style={{ fontSize: 14, color: colors.gray400 }}>{config?.sprintName || '—'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: fonts.body }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, display: 'inline-block' }} />
+          <span style={{ color: dotColor }}>
+            {healthLoading ? 'Checking…' : all ? 'Connected' : 'Disconnected'}
+          </span>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div style={{ display: 'flex', minHeight: 'calc(100vh - 56px)' }}>
+        {(!mobile || mobileOpen) && sidebar}
+
+        {mobile && mobileOpen && (
+          <div onClick={() => setMobileOpen(false)}
+            style={{ position: 'fixed', inset: 0, top: 56, background: 'rgba(0,0,0,0.25)', zIndex: 140 }} />
+        )}
+
+        <main style={{ flex: 1, padding: mobile ? 16 : 32, minWidth: 0 }}>
+          <div style={{ maxWidth: 880, margin: '0 auto' }}>
+            {active === 'overview'    && <OverviewTab    {...tabProps} />}
+            {active === 'connections' && <ConnectionsTab {...tabProps} />}
+            {active === 'team'        && <TeamTab        {...tabProps} />}
+            {active === 'sprint'      && <SprintTab      {...tabProps} />}
+            {active === 'sync'        && <SyncTab        {...tabProps} />}
+            {active === 'report'      && <ReportTab      {...tabProps} />}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

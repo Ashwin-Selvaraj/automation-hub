@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { COLORS, FONTS, card, label, input, hint, btnPrimary, btnSecondary } from '../config.js';
+import { theme, styles } from '../theme.js';
 import { postSprintConfig, getSlackMessages, getJiraIssues } from '../api.js';
-import { Spinner } from '../App.jsx';
+import Card, { SectionHeader } from '../components/Card.jsx';
+import Button from '../components/Button.jsx';
+import Input, { Label, Hint, FormGroup } from '../components/Input.jsx';
+import Spinner from '../components/Spinner.jsx';
 
-const DURATION_OPTIONS = [
-  { weeks: 1, label: '1 Week', desc: '5 working days' },
-  { weeks: 2, label: '2 Weeks', desc: '10 working days (most common)' },
-  { weeks: 3, label: '3 Weeks', desc: '15 working days' },
-];
+const { colors, fonts } = theme;
 
 function addDays(dateStr, days) {
   const d = new Date(dateStr + 'T00:00:00Z');
@@ -15,18 +14,47 @@ function addDays(dateStr, days) {
   return d.toISOString().split('T')[0];
 }
 
-function formatDate(dateStr) {
-  return new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+function fmtDate(dateStr) {
+  return new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+  });
+}
+
+const DURATIONS = [
+  { weeks: 1, label: '1 Week',  desc: '5 working days' },
+  { weeks: 2, label: '2 Weeks', desc: '10 working days' },
+  { weeks: 3, label: '3 Weeks', desc: '15 working days' },
+];
+
+function DurationCard({ opt, selected, onClick }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={() => onClick(opt.weeks)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        flex: 1, padding: '16px', textAlign: 'center', cursor: 'pointer',
+        background: selected ? colors.blue50 : hovered ? colors.gray50 : colors.white,
+        border: `${selected ? 2 : 1}px solid ${selected ? colors.blue600 : colors.gray200}`,
+        borderRadius: 6, outline: 'none',
+      }}
+    >
+      <div style={{ fontSize: 15, fontWeight: 600, color: selected ? colors.blue600 : colors.gray900 }}>
+        {opt.label}
+      </div>
+      <div style={{ fontSize: 12, color: colors.gray400, marginTop: 4 }}>{opt.desc}</div>
+    </button>
+  );
 }
 
 export default function SprintTab({ config, setConfig }) {
-  // Seed local state directly from config so fields are populated on first render
-  const [sprintName, setSprintName] = useState(config?.sprintName || '');
-  const [startDate, setStartDate] = useState(config?.startDate || '');
+  const [sprintName,    setSprintName]    = useState(config?.sprintName || '');
+  const [startDate,     setStartDate]     = useState(config?.startDate  || '');
   const [durationWeeks, setDurationWeeks] = useState(config?.durationWeeks || 2);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState('');
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+  const [error,   setError]   = useState('');
   const [msgCount, setMsgCount] = useState(null);
   const [taskCount, setTaskCount] = useState(null);
 
@@ -40,148 +68,91 @@ export default function SprintTab({ config, setConfig }) {
 
   useEffect(() => {
     getSlackMessages(30).then((d) => setMsgCount(d.messages?.length ?? 0)).catch(() => setMsgCount('—'));
-    getJiraIssues().then((d) => setTaskCount(d.issues?.length ?? 0)).catch(() => setTaskCount('—'));
+    getJiraIssues().then((d)      => setTaskCount(d.issues?.length ?? 0)).catch(() => setTaskCount('—'));
   }, []);
 
   const endDate = startDate ? addDays(startDate, durationWeeks * 7 - 1) : null;
-
-  const weeks = [];
+  const weeks   = [];
   if (startDate) {
     for (let i = 0; i < durationWeeks; i++) {
-      const ws = addDays(startDate, i * 7);
-      const we = addDays(startDate, i * 7 + 6);
-      weeks.push({ label: `Week ${i + 1}`, start: ws, end: we });
+      weeks.push({ label: `Week ${i + 1}`, start: addDays(startDate, i * 7), end: addDays(startDate, i * 7 + 6) });
     }
   }
 
   async function handleSave() {
-    setSaving(true);
-    setError('');
+    setSaving(true); setError('');
     try {
       await postSprintConfig({ sprintName, startDate, durationWeeks });
-      setConfig((c) => ({ ...c, sprintName, startDate, durationWeeks, endDate }));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setSaving(false);
-    }
+      setConfig?.((c) => ({ ...c, sprintName, startDate, durationWeeks, endDate }));
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div>
-        <h2 style={{ fontFamily: FONTS.heading, fontSize: 20, fontWeight: 700, color: COLORS.text }}>Sprint Configuration</h2>
-        <p style={{ color: COLORS.muted, fontSize: 14, marginTop: 4 }}>Set the sprint dates that filter all Slack messages and Jira tasks.</p>
+        <h1 style={styles.pageTitle}>Sprint Configuration</h1>
+        <p style={styles.subtitle}>All data is filtered to this sprint window.</p>
       </div>
 
-      {/* Duration selector */}
-      <div style={card}>
-        <p style={{ ...label, marginBottom: 12 }}>Sprint Duration</p>
+      <Card style={{ marginBottom: 0 }}>
+        <SectionHeader>Duration</SectionHeader>
         <div style={{ display: 'flex', gap: 12 }}>
-          {DURATION_OPTIONS.map((opt) => (
-            <button
-              key={opt.weeks}
-              onClick={() => setDurationWeeks(opt.weeks)}
-              style={{
-                flex: 1,
-                padding: '20px 16px',
-                borderRadius: 12,
-                border: durationWeeks === opt.weeks ? `2px solid ${COLORS.primary}` : `1px solid ${COLORS.border}`,
-                background: durationWeeks === opt.weeks ? 'rgba(124,106,255,0.12)' : COLORS.surface,
-                cursor: 'pointer',
-                textAlign: 'center',
-                transition: 'all 0.15s',
-              }}
-            >
-              <div style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 700, color: durationWeeks === opt.weeks ? COLORS.primary : COLORS.text }}>
-                {opt.label}
-              </div>
-              <div style={{ fontFamily: FONTS.mono, fontSize: 11, color: COLORS.muted, marginTop: 4 }}>{opt.desc}</div>
-            </button>
+          {DURATIONS.map((opt) => (
+            <DurationCard key={opt.weeks} opt={opt} selected={durationWeeks === opt.weeks} onClick={setDurationWeeks} />
           ))}
         </div>
-      </div>
+      </Card>
 
-      {/* Form fields */}
-      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <div>
-          <label style={label}>Sprint Name</label>
-          <input
-            value={sprintName}
-            onChange={(e) => setSprintName(e.target.value)}
-            style={{ ...input }}
-            placeholder="e.g. Sprint 12"
-          />
-          <p style={hint}>Used in Jira comments and the weekly report header.</p>
-        </div>
-        <div>
-          <label style={label}>Sprint Start Date</label>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            style={{ ...input, colorScheme: 'dark' }}
-          />
-          <p style={hint}>End date is calculated automatically based on duration.</p>
-        </div>
-        {endDate && (
-          <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1, background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: '10px 14px' }}>
-              <p style={{ ...label, marginBottom: 2 }}>Start</p>
-              <p style={{ fontFamily: FONTS.mono, fontSize: 14, color: COLORS.secondary }}>{formatDate(startDate)}</p>
-            </div>
-            <div style={{ flex: 1, background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: '10px 14px' }}>
-              <p style={{ ...label, marginBottom: 2 }}>End</p>
-              <p style={{ fontFamily: FONTS.mono, fontSize: 14, color: COLORS.secondary }}>{formatDate(endDate)}</p>
-            </div>
+      <Card style={{ marginBottom: 0 }}>
+        <SectionHeader>Details</SectionHeader>
+        <FormGroup>
+          <Label htmlFor="sprint-name">Sprint Name</Label>
+          <Input id="sprint-name" value={sprintName} onChange={(e) => setSprintName(e.target.value)} placeholder="e.g. Sprint 12" />
+          <Hint>Used in Jira comments and the weekly report header.</Hint>
+        </FormGroup>
+        <FormGroup>
+          <Label htmlFor="start-date">Start Date</Label>
+          <Input id="start-date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          <Hint>End date is calculated automatically based on duration.</Hint>
+        </FormGroup>
+        {error && <p style={{ fontSize: 13, color: colors.red600, marginBottom: 12 }}>{error}</p>}
+        <Button variant="primary" onClick={handleSave} disabled={saving} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {saving ? <><Spinner size={14} /> Saving…</> : saved ? '✓ Saved' : 'Save Sprint'}
+        </Button>
+      </Card>
+
+      {endDate && (
+        <Card style={{ marginBottom: 0 }}>
+          <SectionHeader>Sprint Window</SectionHeader>
+          <div style={{ fontSize: 14, color: colors.gray900, marginBottom: 16 }}>
+            {fmtDate(startDate)} → {fmtDate(endDate)}
           </div>
-        )}
-        {error && <p style={{ fontFamily: FONTS.mono, fontSize: 12, color: COLORS.error }}>{error}</p>}
-        <button onClick={handleSave} disabled={saving} style={{ ...btnPrimary, alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {saving ? <><Spinner size={14} color="#fff" /> Saving…</> : saved ? '✓ Saved' : 'Save Sprint'}
-        </button>
-      </div>
-
-      {/* Week breakdown */}
-      {weeks.length > 0 && (
-        <div style={card}>
-          <p style={{ ...label, marginBottom: 12 }}>Sprint Breakdown</p>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: FONTS.mono, fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                {['Week', 'Start', 'End', 'Days'].map((h) => (
-                  <th key={h} style={{ textAlign: 'left', padding: '8px 12px', color: COLORS.muted, fontWeight: 400, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <tbody>
-              {weeks.map((w) => (
-                <tr key={w.label} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                  <td style={{ padding: '10px 12px', color: COLORS.primary, fontWeight: 500 }}>{w.label}</td>
-                  <td style={{ padding: '10px 12px', color: COLORS.text }}>{formatDate(w.start)}</td>
-                  <td style={{ padding: '10px 12px', color: COLORS.text }}>{formatDate(w.end)}</td>
-                  <td style={{ padding: '10px 12px', color: COLORS.muted }}>5 working days</td>
+              {weeks.map((w, i) => (
+                <tr key={w.label} style={{ borderTop: i > 0 ? `1px solid ${colors.gray100}` : 'none' }}>
+                  <td style={{ padding: '8px 0', fontSize: 14, fontWeight: 500, color: colors.gray900, width: 80 }}>{w.label}</td>
+                  <td style={{ padding: '8px 0', fontSize: 14, color: colors.gray600 }}>{fmtDate(w.start)} – {fmtDate(w.end)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </Card>
       )}
 
-      {/* Live stats */}
-      <div style={{ display: 'flex', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         {[
-          { label: 'Messages in Sprint', value: msgCount, color: COLORS.secondary },
-          { label: 'Jira Tasks in Sprint', value: taskCount, color: COLORS.primary },
+          { label: 'Slack Messages in Sprint', value: msgCount },
+          { label: 'Jira Tasks in Sprint',     value: taskCount },
         ].map((stat) => (
-          <div key={stat.label} style={{ ...card, flex: 1, textAlign: 'center' }}>
-            <div style={{ fontFamily: FONTS.heading, fontSize: 36, fontWeight: 700, color: stat.color }}>
-              {stat.value === null ? <Spinner /> : stat.value}
+          <Card key={stat.label} style={{ marginBottom: 0, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 600, color: colors.gray900, lineHeight: 1.2 }}>
+              {stat.value === null ? <Spinner size={22} /> : stat.value}
             </div>
-            <div style={{ fontFamily: FONTS.mono, fontSize: 12, color: COLORS.muted, marginTop: 6 }}>{stat.label}</div>
-          </div>
+            <div style={{ fontSize: 12, color: colors.gray400, marginTop: 6 }}>{stat.label}</div>
+          </Card>
         ))}
       </div>
     </div>
