@@ -12,8 +12,10 @@ async function request(path, options = {}) {
 
 export const getConfig = () => request('/api/config');
 export const getHealth = () => request('/api/config/health');
+export const getEnvStatus = () => request('/api/config/env-status');
 export const postSprintConfig = (body) => request('/api/config/sprint', { method: 'POST', body: JSON.stringify(body) });
 export const postTeamMembers = (members) => request('/api/config/team', { method: 'POST', body: JSON.stringify({ members }) });
+export const postConnections = (body) => request('/api/config/connections', { method: 'POST', body: JSON.stringify(body) });
 
 export const getSlackMessages = (days = 7) => request(`/api/slack/messages?days=${days}`);
 export const sendDM = (userId, message) => request('/api/slack/dm', { method: 'POST', body: JSON.stringify({ userId, message }) });

@@ -20,9 +20,10 @@ function formatDate(dateStr) {
 }
 
 export default function SprintTab({ config, setConfig }) {
-  const [sprintName, setSprintName] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [durationWeeks, setDurationWeeks] = useState(2);
+  // Seed local state directly from config so fields are populated on first render
+  const [sprintName, setSprintName] = useState(config?.sprintName || '');
+  const [startDate, setStartDate] = useState(config?.startDate || '');
+  const [durationWeeks, setDurationWeeks] = useState(config?.durationWeeks || 2);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');

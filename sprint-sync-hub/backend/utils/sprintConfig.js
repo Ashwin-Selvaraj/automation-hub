@@ -23,6 +23,7 @@ function getSprintConfig() {
     startDate: overrides.startDate || process.env.SPRINT_START_DATE || '2026-05-18',
     durationWeeks: parseInt(overrides.durationWeeks || process.env.SPRINT_DURATION_WEEKS || '2', 10),
     projectKey: overrides.projectKey || process.env.JIRA_PROJECT_KEY || 'QG',
+
     channelId: process.env.SLACK_CHANNEL_ID || '',
     timezone: process.env.TIMEZONE || 'UTC',
     eodCheckTime: process.env.EOD_CHECK_TIME || '17:30',
@@ -47,6 +48,10 @@ function setSprintConfig(updates) {
   if (updates.durationWeeks !== undefined) {
     overrides.durationWeeks = String(updates.durationWeeks);
     process.env.SPRINT_DURATION_WEEKS = String(updates.durationWeeks);
+  }
+  if (updates.projectKey !== undefined) {
+    overrides.projectKey = updates.projectKey;
+    process.env.JIRA_PROJECT_KEY = updates.projectKey;
   }
 }
 

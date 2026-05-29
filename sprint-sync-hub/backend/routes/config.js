@@ -9,6 +9,18 @@ const jiraService = require('../services/jiraService');
 const claudeService = require('../services/claudeService');
 
 /**
+ * Masks a secret string, showing a few chars at each end.
+ * e.g. "xoxb-123456789-abcdef" → "xoxb-••••cdef"
+ * @param {string} val
+ * @returns {string}
+ */
+function maskSecret(val) {
+  if (!val || val.length < 8) return '••••••••';
+  const show = Math.min(6, Math.floor(val.length * 0.2));
+  return val.slice(0, show) + '••••' + val.slice(-4);
+}
+
+/**
  * GET /api/config
  * Returns public sprint configuration (no secrets).
  */
@@ -90,6 +102,58 @@ router.get('/health', async (req, res) => {
   ]);
 
   res.json({ slack: slackOk, jira: jiraOk, claude: claudeOk, errors });
+});
+
+/**
+ * GET /api/config/env-status
+ * Returns which env vars are set. Secrets are masked — never sent in full.
+ * Non-secret values (channel ID, email, URLs, project key) are returned as-is
+ * so the frontend can pre-fill editable fields.
+ */
+router.get('/env-status', (req, res) => {
+  const e = process.env;
+  res.json({
+    slack: {
+      botToken:      { set: !!e.SLACK_BOT_TOKEN,      secret: true,  preview: e.SLACK_BOT_TOKEN      ? maskSecret(e.SLACK_BOT_TOKEN)      : null },
+      channelId:     { set: !!e.SLACK_CHANNEL_ID,     secret: false, value:   e.SLACK_CHANNEL_ID     || null },
+      signingSecret: { set: !!e.SLACK_SIGNING_SECRET, secret: true,  preview: e.SLACK_SIGNING_SECRET ? maskSecret(e.SLACK_SIGNING_SECRET) : null },
+    },
+    jira: {
+      email:      { set: !!e.JIRA_EMAIL,      secret: false, value:   e.JIRA_EMAIL      || null },
+      apiToken:   { set: !!e.JIRA_API_TOKEN,  secret: true,  preview: e.JIRA_API_TOKEN  ? maskSecret(e.JIRA_API_TOKEN)  : null },
+      siteUrl:    { set: !!e.JIRA_SITE_URL,   secret: false, value:   e.JIRA_SITE_URL   || null },
+      projectKey: { set: !!e.JIRA_PROJECT_KEY, secret: false, value: e.JIRA_PROJECT_KEY || null },
+    },
+    claude: {
+      apiKey: { set: !!e.ANTHROPIC_API_KEY, secret: true, preview: e.ANTHROPIC_API_KEY ? maskSecret(e.ANTHROPIC_API_KEY) : null },
+    },
+  });
+});
+
+/**
+ * POST /api/config/connections
+ * Updates non-secret connection values in the runtime environment.
+ * Secrets (tokens, keys) must always be changed in .env + restart.
+ * Body: { channelId?, jiraEmail?, jiraSiteUrl?, projectKey? }
+ */
+router.post('/connections', (req, res) => {
+  try {
+    const { channelId, jiraEmail, jiraSiteUrl, projectKey } = req.body;
+    if (channelId)   process.env.SLACK_CHANNEL_ID   = channelId;
+    if (jiraEmail)   process.env.JIRA_EMAIL          = jiraEmail;
+    if (jiraSiteUrl) process.env.JIRA_SITE_URL       = jiraSiteUrl;
+    if (projectKey)  process.env.JIRA_PROJECT_KEY    = projectKey;
+
+    // Also update sprint config store so getSprintConfig() stays consistent
+    if (projectKey) setSprintConfig({ projectKey });
+
+    res.json({
+      ok: true,
+      updated: { channelId, jiraEmail, jiraSiteUrl, projectKey },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
