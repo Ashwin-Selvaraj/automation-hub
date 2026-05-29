@@ -177,11 +177,27 @@ function startCronJobs() {
           );
           await slackService.sendDM(member.id, dmText);
 
+          // For severely overdue tasks send an escalated DM instead of posting to channel.
+          // We never @mention users in a public channel — all alerts are private DMs.
           if (issue.daysOverdue > 3) {
-            await slackService.postToChannel(
-              cfg2.channelId,
-              `⚠️ *${issue.key}* — "${issue.summary}" is ${issue.daysOverdue} days overdue. cc <@${member.id}>`
-            );
+            const issueUrl2 = issueUrl || issue.key;
+            const escalatedDM =
+              `🚨 *Escalation — ${issue.daysOverdue} days overdue*\n` +
+              `*${issue.key}*: "${issue.summary}"\n` +
+              `This task is now critically overdue. Please update its status or reach out to your lead immediately.\n` +
+              `→ ${issueUrl2}`;
+
+            // DM the assignee with the escalated notice
+            await slackService.sendDM(member.id, escalatedDM);
+
+            // Also DM the manager if one is configured
+            if (cfg2.managerSlackId) {
+              const managerDM =
+                `📋 *Overdue escalation* — ${issue.daysOverdue} days\n` +
+                `<@${member.id}>'s task *${issue.key}* ("${issue.summary}") has not been updated.\n` +
+                `→ ${issueUrl2}`;
+              await slackService.sendDM(cfg2.managerSlackId, managerDM);
+            }
           }
 
           activityLog.addEntry({ type: 'deadline_dm', userId: member.id, userName: member.name, jiraKey: issue.key, action: `Deadline DM sent (${issue.daysOverdue} days overdue)`, success: true });
