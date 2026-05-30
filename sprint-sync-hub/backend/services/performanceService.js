@@ -264,11 +264,22 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
   const effectiveEnd = today < sprintEnd ? today : sprintEnd;
 
   const allWorkingDays = getWorkingDaysList(sprint.start_date, effectiveEnd);
-  const standup_days_expected = allWorkingDays.length;
+
+  // Load daily stats to find leave/absent days — those are excluded from standup expectations
+  const dailyStatsFull = await statsRepo.getDailyStats(memberId, sprintId);
+  const leaveOrAbsentDates = new Set(
+    dailyStatsFull
+      .filter((d) => d.on_leave === true || d.checked_in === false)
+      .map((d) => toDateStr(d.stat_date))
+  );
+
+  // Working days where the person was actually expected to be present
+  const effectiveDays = allWorkingDays.filter((d) => !leaveOrAbsentDates.has(d));
+  const standup_days_expected = effectiveDays.length;
 
   const posts = await standupRepo.getPostsForMemberInSprint(memberId, sprintId);
   const standup_days_posted = posts.length;
-  const { currentStreak, maxStreak } = computeStreaks(posts, allWorkingDays);
+  const { currentStreak, maxStreak } = computeStreaks(posts, effectiveDays);
 
   const taskCounts = await taskRepo.countByStatus(sprintId, memberId);
   const deadlineEvents = await deadlineRepo.getByMemberAndSprint(memberId, sprintId);
@@ -283,9 +294,43 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
     ? overdueEvents.reduce((s, d) => s + (d.days_overdue || 0), 0) / overdueEvents.length
     : 0;
 
-  const dailyStats = await statsRepo.getDailyStats(memberId, sprintId);
+  const dailyStats = dailyStatsFull; // already fetched above
   const slack_messages_processed = dailyStats.reduce((s, d) => s + (d.jira_comments_added || 0) + (d.tasks_moved_forward || 0), 0);
   const jira_auto_updates        = dailyStats.reduce((s, d) => s + (d.jira_comments_added || 0), 0);
+
+  // Attendance aggregates (from Zoho data stored in daily stats)
+  const days_present  = dailyStats.filter((d) => d.checked_in === true).length;
+  const days_on_leave = dailyStats.filter((d) => d.on_leave   === true).length;
+  const days_absent   = dailyStats.filter((d) => d.checked_in === false && !d.on_leave).length;
+
+  // Late arrivals (check_in_time > WORK_START_TIME)
+  const workStartStr  = process.env.WORK_START_TIME || '09:00';
+  const [wsh, wsm]    = workStartStr.split(':').map(Number);
+  const workStartMins = wsh * 60 + wsm;
+  const late_arrivals = dailyStats.filter((d) => {
+    if (!d.check_in_time) return false;
+    const t = String(d.check_in_time).substring(0, 5);
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m > workStartMins;
+  }).length;
+
+  // Average check-in time
+  const checkInTimes = dailyStats
+    .map((d) => d.check_in_time ? String(d.check_in_time).substring(0, 5) : null)
+    .filter(Boolean);
+  let avg_checkin_time = null;
+  if (checkInTimes.length > 0) {
+    const totalMins = checkInTimes.reduce((sum, t) => {
+      const [h, m] = t.split(':').map(Number);
+      return sum + h * 60 + m;
+    }, 0);
+    const avgMins = Math.round(totalMins / checkInTimes.length);
+    avg_checkin_time = `${String(Math.floor(avgMins / 60)).padStart(2, '0')}:${String(avgMins % 60).padStart(2, '0')}`;
+  }
+
+  const attendance_rate = allWorkingDays.length > 0
+    ? Math.round(((days_present + days_on_leave) / allWorkingDays.length) * 10000) / 100
+    : 100;
 
   const notifHistory = await notifRepo.getNotificationHistory(organisationId, memberId, 200);
   const no_match_dms_received  = notifHistory.filter((n) => n.type === 'no_match_dm').length;
@@ -311,6 +356,13 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
     jira_auto_updates,
     no_match_dms_received,
     tasks_created_after_dm,
+    // Attendance
+    days_present,
+    days_absent,
+    days_on_leave,
+    late_arrivals,
+    avg_checkin_time,
+    attendance_rate,
   };
 
   summaryData.performance_score = scoringService.computePerformanceScore(summaryData);

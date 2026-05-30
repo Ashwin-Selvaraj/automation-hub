@@ -28,6 +28,7 @@ app.use('/api/jira',        require('./routes/jira'));
 app.use('/api/sync',        require('./routes/sync'));
 app.use('/api/report',      require('./routes/report'));
 app.use('/api/performance', require('./routes/performance'));
+app.use('/api/attendance',  require('./routes/attendance'));
 
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();

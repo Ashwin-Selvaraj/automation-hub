@@ -8,6 +8,7 @@ const { getSprintWindow } = require('../utils/dateUtils');
 const slackService = require('../services/slackService');
 const jiraService  = require('../services/jiraService');
 const claudeService = require('../services/claudeService');
+const zohoService  = require('../services/zohoService');
 const activityLog  = require('../services/activityLog');
 const memberRepo   = require('../repositories/memberRepository');
 
@@ -105,13 +106,16 @@ router.get('/health', async (req, res) => {
   const errors = {};
   const cfg    = configService.getSprintConfig();
 
-  const [slackOk, jiraOk, claudeOk] = await Promise.all([
+  const [slackOk, jiraOk, claudeOk, zohoOk] = await Promise.all([
     slackService.testConnection().catch((e) => { errors.slack = e.message; return false; }),
     jiraService.testConnection(cfg.projectKey).catch((e) => { errors.jira = e.message; return false; }),
     claudeService.testConnection().catch((e) => { errors.claude = e.message; return false; }),
+    zohoService.isConfigured()
+      ? zohoService.testConnection().catch((e) => { errors.zoho = e.message; return false; })
+      : Promise.resolve(null), // null = not configured (not a failure)
   ]);
 
-  res.json({ slack: slackOk, jira: jiraOk, claude: claudeOk, errors });
+  res.json({ slack: slackOk, jira: jiraOk, claude: claudeOk, zoho: zohoOk, errors });
 });
 
 // ─── GET /api/config/env-status ───────────────────────────────────────────────
@@ -155,6 +159,15 @@ router.get('/env-status', async (req, res) => {
       claude: {
         apiKey: { set: getSet('claude.api_key'), secret: true, preview: getPreview('claude.api_key') },
       },
+      zoho: {
+        clientId:     { set: getSet('zoho.client_id'),     secret: false, value:   getV('zoho.client_id') },
+        clientSecret: { set: getSet('zoho.client_secret'), secret: true,  preview: getPreview('zoho.client_secret') },
+        refreshToken: { set: getSet('zoho.refresh_token'), secret: true,  preview: getPreview('zoho.refresh_token') },
+        orgId:        { set: getSet('zoho.org_id'),        secret: false, value:   getV('zoho.org_id') },
+        domain:       { set: getSet('zoho.domain'),        secret: false, value:   getV('zoho.domain') || 'zoho.in' },
+        workStart:    { set: getSet('zoho.work_start'),    secret: false, value:   getV('zoho.work_start') || '09:00' },
+        workEnd:      { set: getSet('zoho.work_end'),      secret: false, value:   getV('zoho.work_end')   || '18:00' },
+      },
       schedule: {
         timezone:       { set: getSet('schedule.timezone'),    secret: false, value: getV('schedule.timezone') },
         syncTime:       { set: getSet('schedule.sync_time'),   secret: false, value: getV('schedule.sync_time') },
@@ -191,24 +204,34 @@ router.post('/connections', async (req, res) => {
       anthropicApiKey,
       // Schedule
       timezone, syncTime, eodCheckTime, reportDay, reportTime, managerSlackId,
+      // Zoho People
+      zohoClientId, zohoClientSecret, zohoRefreshToken, zohoOrgId, zohoDomain,
+      workStartTime, workEndTime,
     } = req.body;
 
     const updates = {};
-    if (channelId       != null) updates['slack.channel_id']          = channelId;
-    if (botToken        != null) updates['slack.bot_token']           = botToken;
-    if (signingSecret   != null) updates['slack.signing_secret']      = signingSecret;
-    if (jiraEmail       != null) updates['jira.email']                = jiraEmail;
-    if (jiraApiToken    != null) updates['jira.api_token']            = jiraApiToken;
-    if (jiraSiteUrl     != null) updates['jira.site_url']             = jiraSiteUrl;
-    if (jiraCloudId     != null) updates['jira.cloud_id']             = jiraCloudId;
-    if (projectKey      != null) updates['jira.project_key']          = projectKey;
-    if (anthropicApiKey != null) updates['claude.api_key']            = anthropicApiKey;
-    if (timezone        != null) updates['schedule.timezone']         = timezone;
-    if (syncTime        != null) updates['schedule.sync_time']        = syncTime;
-    if (eodCheckTime    != null) updates['schedule.eod_time']         = eodCheckTime;
-    if (reportDay       != null) updates['schedule.report_day']       = reportDay;
-    if (reportTime      != null) updates['schedule.report_time']      = reportTime;
-    if (managerSlackId  != null) updates['schedule.manager_slack_id'] = managerSlackId;
+    if (channelId         != null) updates['slack.channel_id']          = channelId;
+    if (botToken          != null) updates['slack.bot_token']           = botToken;
+    if (signingSecret     != null) updates['slack.signing_secret']      = signingSecret;
+    if (jiraEmail         != null) updates['jira.email']                = jiraEmail;
+    if (jiraApiToken      != null) updates['jira.api_token']            = jiraApiToken;
+    if (jiraSiteUrl       != null) updates['jira.site_url']             = jiraSiteUrl;
+    if (jiraCloudId       != null) updates['jira.cloud_id']             = jiraCloudId;
+    if (projectKey        != null) updates['jira.project_key']          = projectKey;
+    if (anthropicApiKey   != null) updates['claude.api_key']            = anthropicApiKey;
+    if (timezone          != null) updates['schedule.timezone']         = timezone;
+    if (syncTime          != null) updates['schedule.sync_time']        = syncTime;
+    if (eodCheckTime      != null) updates['schedule.eod_time']         = eodCheckTime;
+    if (reportDay         != null) updates['schedule.report_day']       = reportDay;
+    if (reportTime        != null) updates['schedule.report_time']      = reportTime;
+    if (managerSlackId    != null) updates['schedule.manager_slack_id'] = managerSlackId;
+    if (zohoClientId      != null) updates['zoho.client_id']            = zohoClientId;
+    if (zohoClientSecret  != null) updates['zoho.client_secret']        = zohoClientSecret;
+    if (zohoRefreshToken  != null) updates['zoho.refresh_token']        = zohoRefreshToken;
+    if (zohoOrgId         != null) updates['zoho.org_id']               = zohoOrgId;
+    if (zohoDomain        != null) updates['zoho.domain']               = zohoDomain;
+    if (workStartTime     != null) updates['zoho.work_start']           = workStartTime;
+    if (workEndTime       != null) updates['zoho.work_end']             = workEndTime;
 
     await configService.setMany(updates);
     res.json({ ok: true, updated: Object.keys(updates) });

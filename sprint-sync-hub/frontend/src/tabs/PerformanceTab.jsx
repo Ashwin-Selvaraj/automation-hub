@@ -695,6 +695,47 @@ function MemberDrawer({ memberId, onClose }) {
               </span>
             </div>
 
+            {/* Attendance (from Zoho) */}
+            {s && (s.days_present > 0 || s.days_on_leave > 0 || s.days_absent > 0 || s.late_arrivals > 0) && (
+              <>
+                <Divider />
+                <SectionLabel>Attendance This Sprint</SectionLabel>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 14 }}>
+                  {[
+                    ['Days Present',   s.days_present   ?? 0, colors.green600,  colors.green50],
+                    ['On Leave',       s.days_on_leave  ?? 0, colors.gray400,   colors.gray50],
+                    ['Absent',         s.days_absent    ?? 0, colors.red600,    colors.red50],
+                    ['Late Arrivals',  s.late_arrivals  ?? 0, colors.amber600,  colors.amber50],
+                  ].map(([label, val, color, bg]) => (
+                    <div key={label} style={{
+                      background: bg, border: `1px solid ${color}22`,
+                      borderRadius: 8, padding: '10px 14px',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    }}>
+                      <div style={{ fontSize: 11, color: colors.gray500, fontFamily: fonts.body, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: fonts.body }}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{
+                  display: 'flex', gap: 16, alignItems: 'center',
+                  padding: '10px 14px', background: colors.gray50,
+                  border: `1px solid ${colors.gray100}`, borderRadius: 8, marginBottom: 18,
+                  fontSize: 12, fontFamily: fonts.body, color: colors.gray600,
+                }}>
+                  {s.avg_checkin_time && (
+                    <span>⏰ Avg check-in: <strong>{s.avg_checkin_time}</strong></span>
+                  )}
+                  {s.attendance_rate != null && (
+                    <span>📊 Attendance rate: <strong style={{ color: parseFloat(s.attendance_rate) >= 90 ? colors.green600 : parseFloat(s.attendance_rate) >= 75 ? colors.amber600 : colors.red600 }}>{parseFloat(s.attendance_rate ?? 100).toFixed(0)}%</strong></span>
+                  )}
+                  {s.days_on_leave > 0 && (
+                    <span style={{ color: colors.gray400 }}>({s.days_on_leave} day{s.days_on_leave !== 1 ? 's' : ''} leave excluded from standup score)</span>
+                  )}
+                </div>
+              </>
+            )}
+
             {/* Overall stats */}
             {m.overallStats && (
               <>

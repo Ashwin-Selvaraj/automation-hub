@@ -15,6 +15,13 @@ async function upsertDailyStats(organisationId, sprintId, memberId, statDate, fi
       jira_comments_added = 0,
       bulk_post = false,
       bulk_post_actual_date = null,
+      // Zoho attendance fields
+      checked_in = null,
+      check_in_time = null,
+      check_out_time = null,
+      hours_worked = null,
+      on_leave = null,
+      leave_type = null,
     } = fields;
 
     const { rows } = await db.query(
@@ -22,8 +29,10 @@ async function upsertDailyStats(organisationId, sprintId, memberId, statDate, fi
          (organisation_id, sprint_id, member_id, stat_date,
           posted_standup, standup_post_id, tasks_completed, tasks_moved_forward,
           deadlines_due, deadlines_hit, deadlines_missed, jira_comments_added,
-          is_bulk_post, bulk_post_actual_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          is_bulk_post, bulk_post_actual_date,
+          checked_in, check_in_time, check_out_time, hours_worked, on_leave, leave_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+               $15, $16, $17, $18, $19, $20)
        ON CONFLICT (organisation_id, sprint_id, member_id, stat_date) DO UPDATE SET
          posted_standup        = GREATEST(member_daily_stats.posted_standup::int, EXCLUDED.posted_standup::int)::boolean,
          standup_post_id       = COALESCE(EXCLUDED.standup_post_id, member_daily_stats.standup_post_id),
@@ -34,12 +43,19 @@ async function upsertDailyStats(organisationId, sprintId, memberId, statDate, fi
          deadlines_missed      = member_daily_stats.deadlines_missed + EXCLUDED.deadlines_missed,
          jira_comments_added   = member_daily_stats.jira_comments_added + EXCLUDED.jira_comments_added,
          is_bulk_post          = EXCLUDED.is_bulk_post OR member_daily_stats.is_bulk_post,
-         bulk_post_actual_date = COALESCE(EXCLUDED.bulk_post_actual_date, member_daily_stats.bulk_post_actual_date)
+         bulk_post_actual_date = COALESCE(EXCLUDED.bulk_post_actual_date, member_daily_stats.bulk_post_actual_date),
+         checked_in    = COALESCE(EXCLUDED.checked_in,    member_daily_stats.checked_in),
+         check_in_time = COALESCE(EXCLUDED.check_in_time, member_daily_stats.check_in_time),
+         check_out_time= COALESCE(EXCLUDED.check_out_time,member_daily_stats.check_out_time),
+         hours_worked  = COALESCE(EXCLUDED.hours_worked,  member_daily_stats.hours_worked),
+         on_leave      = COALESCE(EXCLUDED.on_leave,      member_daily_stats.on_leave),
+         leave_type    = COALESCE(EXCLUDED.leave_type,    member_daily_stats.leave_type)
        RETURNING *`,
       [organisationId, sprintId, memberId, statDate,
        posted_standup, standup_post_id, tasks_completed, tasks_moved_forward,
        deadlines_due, deadlines_hit, deadlines_missed, jira_comments_added,
-       bulk_post, bulk_post_actual_date]
+       bulk_post, bulk_post_actual_date,
+       checked_in, check_in_time, check_out_time, hours_worked, on_leave, leave_type]
     );
     return rows[0];
   } catch (err) {
@@ -70,8 +86,11 @@ async function upsertSprintSummary(organisationId, sprintId, memberId, data) {
           tasks_assigned, tasks_completed, tasks_in_progress, tasks_not_started,
           completion_rate, deadlines_total, deadlines_hit, deadlines_missed, deadlines_extended,
           deadline_hit_rate, avg_days_overdue, slack_messages_processed, jira_auto_updates,
-          no_match_dms_received, tasks_created_after_dm, performance_score, computed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NOW())
+          no_match_dms_received, tasks_created_after_dm, performance_score,
+          days_present, days_absent, days_on_leave, late_arrivals, avg_checkin_time, attendance_rate,
+          computed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+               $24,$25,$26,$27,$28,$29,NOW())
        ON CONFLICT (organisation_id, sprint_id, member_id) DO UPDATE SET
          standup_days_posted      = EXCLUDED.standup_days_posted,
          standup_days_expected    = EXCLUDED.standup_days_expected,
@@ -93,6 +112,12 @@ async function upsertSprintSummary(organisationId, sprintId, memberId, data) {
          no_match_dms_received    = EXCLUDED.no_match_dms_received,
          tasks_created_after_dm   = EXCLUDED.tasks_created_after_dm,
          performance_score        = EXCLUDED.performance_score,
+         days_present             = EXCLUDED.days_present,
+         days_absent              = EXCLUDED.days_absent,
+         days_on_leave            = EXCLUDED.days_on_leave,
+         late_arrivals            = EXCLUDED.late_arrivals,
+         avg_checkin_time         = EXCLUDED.avg_checkin_time,
+         attendance_rate          = EXCLUDED.attendance_rate,
          computed_at              = NOW()
        RETURNING *`,
       [
@@ -117,6 +142,12 @@ async function upsertSprintSummary(organisationId, sprintId, memberId, data) {
         data.no_match_dms_received || 0,
         data.tasks_created_after_dm || 0,
         data.performance_score || 0,
+        data.days_present || 0,
+        data.days_absent || 0,
+        data.days_on_leave || 0,
+        data.late_arrivals || 0,
+        data.avg_checkin_time || null,
+        data.attendance_rate != null ? data.attendance_rate : 100,
       ]
     );
     return rows[0];

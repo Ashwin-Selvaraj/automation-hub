@@ -325,13 +325,14 @@ function ActivityTable({ entries }) {
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
 export default function OverviewTab({ config, navigate }) {
-  const [messages,   setMessages]   = useState([]);
-  const [issues,     setIssues]     = useState([]);
-  const [log,        setLog]        = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [enabled,    setEnabled]    = useState([true, true, true, true]);
-  const [perfDash,   setPerfDash]   = useState(null);
-  const [popup,      setPopup]      = useState(null); // 'posted' | 'missing' | 'tasks' | null
+  const [messages,    setMessages]    = useState([]);
+  const [issues,      setIssues]      = useState([]);
+  const [log,         setLog]         = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [enabled,     setEnabled]     = useState([true, true, true, true]);
+  const [perfDash,    setPerfDash]    = useState(null);
+  const [popup,       setPopup]       = useState(null); // 'posted' | 'missing' | 'tasks' | 'present' | 'leave' | 'late' | null
+  const [attendance,  setAttendance]  = useState(null); // Zoho data
 
   useEffect(() => {
     Promise.all([
@@ -339,11 +340,13 @@ export default function OverviewTab({ config, navigate }) {
       getJiraIssues().catch(() => ({ issues: [] })),
       getSyncLog(50).catch(() => ({ entries: [] })),
       fetch(`${API_BASE}/api/performance/dashboard`).then((r) => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([msgData, issData, logData, perf]) => {
+      fetch(`${API_BASE}/api/attendance/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([msgData, issData, logData, perf, att]) => {
       setMessages(msgData.messages || []);
       setIssues(issData.issues || []);
       setLog(logData.entries || []);
       setPerfDash(perf);
+      setAttendance(att);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -413,6 +416,32 @@ export default function OverviewTab({ config, navigate }) {
         ))}
       </div>
 
+      {/* Attendance row (Zoho) — only shown when Zoho is configured */}
+      {attendance?.configured && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: colors.gray400, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            Attendance Today
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+            {[
+              { id: 'present', label: 'Present',   value: attendance.summary?.present  ?? 0, tint: colors.tintGreen,  members: attendance.present  || [] },
+              { id: 'leave',   label: 'On Leave',  value: attendance.summary?.onLeave  ?? 0, tint: { bg: colors.gray50, border: colors.gray200, text: colors.gray500 }, members: attendance.onLeave || [] },
+              { id: 'absent',  label: 'Absent',    value: attendance.summary?.absent   ?? 0, tint: colors.tintRed,    members: attendance.absent   || [] },
+              { id: 'late',    label: 'Late Today', value: attendance.summary?.late    ?? 0, tint: colors.tintAmber,  members: attendance.late     || [] },
+            ].map((m) => (
+              <MetricCard
+                key={m.id}
+                label={m.label}
+                value={m.value}
+                loading={loading}
+                tint={m.tint}
+                onClick={!loading ? () => setPopup(m.id) : undefined}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* At-risk row */}
       {atRisk.length > 0 && (
         <Card style={{ marginBottom: 0, padding: '12px 16px' }}>
@@ -481,6 +510,42 @@ export default function OverviewTab({ config, navigate }) {
       {popup === 'tasks' && (
         <JiraTasksPopup
           issues={issues}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'present' && attendance?.present && (
+        <MemberListPopup
+          title="Present Today"
+          members={attendance.present.map((m) => ({ ...m, role: m.checkInTime ? `Checked in at ${m.checkInTime}` : undefined }))}
+          emptyText="No check-ins recorded yet today."
+          accentColor={colors.green600}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'leave' && attendance?.onLeave && (
+        <MemberListPopup
+          title="On Leave Today"
+          members={attendance.onLeave.map((m) => ({ ...m, role: m.leaveType || 'Approved Leave' }))}
+          emptyText="Nobody is on leave today."
+          accentColor={colors.gray400}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'absent' && attendance?.absent && (
+        <MemberListPopup
+          title="Absent Today"
+          members={attendance.absent}
+          emptyText="No absences recorded today."
+          accentColor={colors.red600}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'late' && attendance?.late && (
+        <MemberListPopup
+          title="Late Today"
+          members={attendance.late.map((m) => ({ ...m, role: m.checkInTime ? `Checked in at ${m.checkInTime} (${m.minutesLate} min late)` : undefined }))}
+          emptyText="No late arrivals today. 🎉"
+          accentColor={colors.amber600}
           onClose={() => setPopup(null)}
         />
       )}

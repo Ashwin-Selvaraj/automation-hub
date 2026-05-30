@@ -37,6 +37,15 @@ const CONFIG_DEFS = {
   // Organisation
   'org.id':   { category: 'org', label: 'Organisation ID',   isSecret: false, envVar: 'ORGANISATION_ID',   default: '1' },
   'org.name': { category: 'org', label: 'Organisation Name', isSecret: false, envVar: 'ORGANISATION_NAME', default: 'My Organisation' },
+
+  // Zoho People
+  'zoho.client_id':     { category: 'zoho', label: 'Zoho Client ID',     isSecret: false, envVar: 'ZOHO_CLIENT_ID' },
+  'zoho.client_secret': { category: 'zoho', label: 'Zoho Client Secret', isSecret: true,  envVar: 'ZOHO_CLIENT_SECRET' },
+  'zoho.refresh_token': { category: 'zoho', label: 'Zoho Refresh Token', isSecret: true,  envVar: 'ZOHO_REFRESH_TOKEN' },
+  'zoho.org_id':        { category: 'zoho', label: 'Zoho Org ID',        isSecret: false, envVar: 'ZOHO_ORG_ID' },
+  'zoho.domain':        { category: 'zoho', label: 'Zoho Domain',        isSecret: false, envVar: 'ZOHO_DOMAIN',    default: 'zoho.in' },
+  'zoho.work_start':    { category: 'zoho', label: 'Work Start Time',    isSecret: false, envVar: 'WORK_START_TIME', default: '09:00' },
+  'zoho.work_end':      { category: 'zoho', label: 'Work End Time',      isSecret: false, envVar: 'WORK_END_TIME',   default: '18:00' },
 };
 
 // In-memory cache — loaded once from DB, invalidated on write

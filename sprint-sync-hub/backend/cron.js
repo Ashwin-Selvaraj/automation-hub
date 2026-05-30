@@ -13,6 +13,7 @@ const sprintRepo       = require('./repositories/sprintRepository');
 const memberRepo       = require('./repositories/memberRepository');
 const { getSprintWindow, toUnixTimestamp } = require('./utils/dateUtils');
 const configService = require('./services/configService');
+const zohoService   = require('./services/zohoService');
 
 let lastSyncTs = null;
 
@@ -294,6 +295,61 @@ function startCronJobs() {
         if (alreadyDMed) continue;
 
         try {
+          // ── Zoho attendance check ─────────────────────────────────────────────
+          let attendanceData = null;
+          let leaveData      = { onLeave: false };
+          if (zohoService.isConfigured() && member.email) {
+            [attendanceData, leaveData] = await Promise.all([
+              zohoService.getAttendance(member.email, today).catch(() => null),
+              zohoService.isOnLeave(member.email, today).catch(() => ({ onLeave: false })),
+            ]);
+          }
+
+          // Skip if on approved leave
+          if (leaveData?.onLeave) {
+            console.log(`[cron] EOD: skipping ${member.name} — on ${leaveData.leaveType || 'leave'} today`);
+            activityLog.addEntry({ type: 'leave_skip', userId: member.id, userName: member.name, action: `Skipped EOD DM — on ${leaveData.leaveType || 'leave'}`, success: true });
+            if (sprintId) {
+              try {
+                const dbM = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
+                await statsRepo.upsertDailyStats(orgId, sprintId, dbM.id, today, {
+                  on_leave: true, leave_type: leaveData.leaveType || 'Leave',
+                });
+              } catch (_) {}
+            }
+            continue;
+          }
+
+          // Skip if Zoho shows member did not check in (absent, no record)
+          if (zohoService.isConfigured() && member.email && attendanceData && !attendanceData.checkedIn) {
+            console.log(`[cron] EOD: skipping ${member.name} — no check-in today (absent)`);
+            activityLog.addEntry({ type: 'absent_skip', userId: member.id, userName: member.name, action: 'Skipped EOD DM — not checked in (absent)', success: true });
+            if (sprintId) {
+              try {
+                const dbM = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
+                await statsRepo.upsertDailyStats(orgId, sprintId, dbM.id, today, {
+                  checked_in: false, posted_standup: false,
+                });
+              } catch (_) {}
+            }
+            continue;
+          }
+
+          // Skip if member checked out more than 1 hour before EOD check time
+          if (attendanceData?.checkOutTime) {
+            const eodMinutes  = parseTime(cfg3.eodCheckTime || '18:30');
+            const coStr       = attendanceData.checkOutTime;
+            const [coh, com]  = coStr.split(':').map(Number);
+            const coMinutes   = coh * 60 + com;
+            const eodTotalMin = eodMinutes.hour * 60 + eodMinutes.minute;
+            if (eodTotalMin - coMinutes > 60) {
+              console.log(`[cron] EOD: skipping ${member.name} — checked out at ${coStr}, more than 1h before EOD`);
+              activityLog.addEntry({ type: 'early_checkout_skip', userId: member.id, userName: member.name, action: `Skipped EOD DM — checked out at ${coStr}`, success: true });
+              continue;
+            }
+          }
+
+          // ── Determine DM type ────────────────────────────────────────────────
           let dmText;
           if (!didPost) {
             // Member hasn't posted standup at all today
@@ -313,8 +369,14 @@ function startCronJobs() {
           if (sprintId) {
             try {
               const dbMember = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
+              const attFields = attendanceData ? {
+                checked_in:    attendanceData.checkedIn,
+                check_in_time: attendanceData.checkInTime || null,
+                check_out_time:attendanceData.checkOutTime || null,
+                hours_worked:  attendanceData.hoursWorked || null,
+              } : {};
               if (!didPost) {
-                await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, { posted_standup: false });
+                await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, { posted_standup: false, ...attFields });
               }
               await notifRepo.recordNotification(orgId, dbMember.id, didPost ? 'no_match_dm' : 'missing_standup', 'dm', null);
             } catch (perfErr) {
