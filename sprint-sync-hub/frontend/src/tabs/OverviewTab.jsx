@@ -138,6 +138,100 @@ function MemberListPopup({ title, members, emptyText, accentColor, onClose }) {
   );
 }
 
+// ─── Jira Tasks popup ────────────────────────────────────────────────────────
+
+function statusColor(status) {
+  if (!status) return colors.gray400;
+  const s = status.toLowerCase();
+  if (s.includes('done') || s.includes('closed') || s.includes('complete')) return colors.green600;
+  if (s.includes('progress') || s.includes('review')) return colors.blue600;
+  if (s.includes('block') || s.includes('overdue')) return colors.red600;
+  return colors.amber600;
+}
+
+function JiraTasksPopup({ issues, onClose }) {
+  useEffect(() => {
+    const fn = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', fn);
+    return () => document.removeEventListener('keydown', fn);
+  }, [onClose]);
+
+  const grouped = issues.reduce((acc, iss) => {
+    const s = iss.status || 'Unknown';
+    if (!acc[s]) acc[s] = [];
+    acc[s].push(iss);
+    return acc;
+  }, {});
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 300, backdropFilter: 'blur(1px)' }} />
+      <div style={{
+        position: 'fixed', top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        background: colors.white, borderRadius: 12,
+        boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
+        zIndex: 301, width: 500, maxHeight: '75vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 20px', borderBottom: `1px solid ${colors.gray100}`,
+          background: colors.gray50, flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: colors.green600 }} />
+            <span style={{ fontSize: 14, fontWeight: 700, color: colors.gray900 }}>Tasks in Jira</span>
+            <span style={{ fontSize: 11, fontWeight: 700, background: colors.green600 + '22', color: colors.green600, padding: '1px 7px', borderRadius: 99 }}>
+              {issues.length}
+            </span>
+          </div>
+          <button onClick={onClose} style={{ background: colors.gray100, border: 'none', borderRadius: '50%', width: 26, height: 26, cursor: 'pointer', fontSize: 15, color: colors.gray500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: 'auto', padding: '8px 0' }}>
+          {issues.length === 0 ? (
+            <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 13, color: colors.gray400 }}>No tasks found in Jira.</div>
+          ) : (
+            Object.entries(grouped).map(([status, items]) => (
+              <div key={status}>
+                {/* Status group header */}
+                <div style={{ padding: '8px 20px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor(status), flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: colors.gray500, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    {status} ({items.length})
+                  </span>
+                </div>
+                {items.map((iss, i) => (
+                  <div key={iss.key} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 12,
+                    padding: '9px 20px',
+                    borderBottom: `1px solid ${colors.gray50}`,
+                    background: i % 2 === 0 ? colors.white : colors.gray50,
+                  }}>
+                    {/* Issue key */}
+                    <span style={{ fontFamily: fonts.mono, fontSize: 11, color: colors.blue600, fontWeight: 700, whiteSpace: 'nowrap', marginTop: 1, minWidth: 70 }}>
+                      {iss.key}
+                    </span>
+                    {/* Summary */}
+                    <span style={{ fontSize: 13, color: colors.gray800, flex: 1, lineHeight: 1.5 }}>{iss.summary}</span>
+                    {/* Assignee */}
+                    {iss.assigneeName && iss.assigneeName !== 'Unassigned' && (
+                      <span style={{ fontSize: 11, color: colors.gray400, whiteSpace: 'nowrap', marginTop: 1 }}>{iss.assigneeName}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Metric card — optionally clickable ──────────────────────────────────────
 
 function MetricCard({ label, value, loading, tint, onClick }) {
@@ -230,14 +324,14 @@ function ActivityTable({ entries }) {
 
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
-export default function OverviewTab({ config }) {
+export default function OverviewTab({ config, navigate }) {
   const [messages,   setMessages]   = useState([]);
-  const [taskCount,  setTaskCount]  = useState(null);
+  const [issues,     setIssues]     = useState([]);
   const [log,        setLog]        = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [enabled,    setEnabled]    = useState([true, true, true, true]);
   const [perfDash,   setPerfDash]   = useState(null);
-  const [popup,      setPopup]      = useState(null); // 'posted' | 'missing' | null
+  const [popup,      setPopup]      = useState(null); // 'posted' | 'missing' | 'tasks' | null
 
   useEffect(() => {
     Promise.all([
@@ -247,7 +341,7 @@ export default function OverviewTab({ config }) {
       fetch(`${API_BASE}/api/performance/dashboard`).then((r) => r.ok ? r.json() : null).catch(() => null),
     ]).then(([msgData, issData, logData, perf]) => {
       setMessages(msgData.messages || []);
-      setTaskCount((issData.issues || []).length);
+      setIssues(issData.issues || []);
       setLog(logData.entries || []);
       setPerfDash(perf);
     }).finally(() => setLoading(false));
@@ -258,7 +352,6 @@ export default function OverviewTab({ config }) {
   const todayMsgs  = messages.filter((m) => m.date && new Date(m.date).toDateString() === today);
   const teamMembers = config?.teamMembers || [];
 
-  // Build a map: userId → latest post time today
   const postedMap = {};
   for (const msg of todayMsgs) {
     if (!msg.userId) continue;
@@ -275,31 +368,28 @@ export default function OverviewTab({ config }) {
     }));
 
   const missingMembers = teamMembers.filter((m) => !postedMap[m.id]);
-
-  // Fall back to raw userId count when no team config
-  const postedCount  = teamMembers.length > 0 ? postedMembers.length  : new Set(todayMsgs.map((m) => m.userId).filter(Boolean)).size;
+  const postedCount  = teamMembers.length > 0 ? postedMembers.length : new Set(todayMsgs.map((m) => m.userId).filter(Boolean)).size;
   const missingCount = teamMembers.length > 0 ? missingMembers.length : Math.max(0, (config?.teamMembers?.length || 0) - postedCount);
 
   // ── Metrics ────────────────────────────────────────────────────────────────
   const ts = perfDash?.teamStats;
   const metrics = ts ? [
-    { id: 'score',    label: 'Avg Performance Score', value: ts.avgScore + '',        tint: colors.tintBlue   },
-    { id: 'complete', label: 'Completion Rate',        value: ts.avgCompletion + '%',  tint: colors.tintGreen  },
-    { id: 'deadline', label: 'Deadline Rate',          value: ts.avgDeadlineRate + '%',tint: colors.tintAmber  },
-    { id: 'standup',  label: 'Standup Rate',           value: ts.avgStandupRate + '%', tint: colors.tintPurple },
+    { id: 'score',    label: 'Avg Performance Score', value: ts.avgScore + '',         tint: colors.tintBlue   },
+    { id: 'complete', label: 'Completion Rate',        value: ts.avgCompletion + '%',   tint: colors.tintGreen  },
+    { id: 'deadline', label: 'Deadline Rate',          value: ts.avgDeadlineRate + '%', tint: colors.tintAmber  },
+    { id: 'standup',  label: 'Standup Rate',           value: ts.avgStandupRate + '%',  tint: colors.tintPurple },
   ] : [
-    { id: 'messages', label: 'Messages This Sprint',   value: messages.length,         tint: colors.tintBlue   },
-    { id: 'tasks',    label: 'Tasks in Jira',          value: taskCount,               tint: colors.tintGreen  },
-    { id: 'posted',   label: 'Posted Today',           value: postedCount,             tint: colors.tintAmber,  clickable: true },
-    { id: 'missing',  label: 'Missing Today',          value: missingCount,            tint: colors.tintRed,    clickable: true },
+    { id: 'messages', label: 'Messages This Sprint',   value: messages.length,  tint: colors.tintBlue,  navigate: 'sync' },
+    { id: 'tasks',    label: 'Tasks in Jira',          value: issues.length,    tint: colors.tintGreen, clickable: true  },
+    { id: 'posted',   label: 'Posted Today',           value: postedCount,      tint: colors.tintAmber, clickable: true  },
+    { id: 'missing',  label: 'Missing Today',          value: missingCount,     tint: colors.tintRed,   clickable: true  },
   ];
 
   const atRisk = perfDash?.atRisk || [];
 
-  // ── Popup data ─────────────────────────────────────────────────────────────
-  function openPopup(id) {
-    if (id === 'posted')  setPopup('posted');
-    if (id === 'missing') setPopup('missing');
+  function handleCardClick(m) {
+    if (m.navigate) { navigate?.(m.navigate); return; }
+    if (m.clickable) setPopup(m.id);
   }
 
   return (
@@ -318,7 +408,7 @@ export default function OverviewTab({ config }) {
             value={m.value}
             loading={loading}
             tint={m.tint}
-            onClick={m.clickable && !loading ? () => openPopup(m.id) : undefined}
+            onClick={(m.clickable || m.navigate) && !loading ? () => handleCardClick(m) : undefined}
           />
         ))}
       </div>
@@ -369,7 +459,7 @@ export default function OverviewTab({ config }) {
         </div>
       </Card>
 
-      {/* Member list popups */}
+      {/* Popups */}
       {popup === 'posted' && (
         <MemberListPopup
           title="Posted Today"
@@ -385,6 +475,12 @@ export default function OverviewTab({ config }) {
           members={missingMembers}
           emptyText="Everyone has posted today! 🎉"
           accentColor={colors.red600}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'tasks' && (
+        <JiraTasksPopup
+          issues={issues}
           onClose={() => setPopup(null)}
         />
       )}

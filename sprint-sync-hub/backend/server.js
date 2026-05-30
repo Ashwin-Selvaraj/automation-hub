@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const { getSprintWindow } = require('./utils/dateUtils');
-const { getSprintConfig } = require('./utils/sprintConfig');
+const configService = require('./services/configService');
 const { startCronJobs }   = require('./cron');
 const { testConnection, runMigrations } = require('./db');
 const sprintRepo   = require('./repositories/sprintRepository');
@@ -30,7 +30,7 @@ app.use('/api/report',      require('./routes/report'));
 app.use('/api/performance', require('./routes/performance'));
 
 app.get('/api/health', (req, res) => {
-  const cfg    = getSprintConfig();
+  const cfg    = configService.getSprintConfig();
   const window = getSprintWindow();
   res.json({
     status: 'ok',
@@ -52,15 +52,18 @@ app.use((err, req, res, next) => {
 });
 
 async function boot() {
-  const cfg = getSprintConfig();
-
   // 1. Connect to database
   await testConnection();
 
-  // 2. Run migrations
+  // 2. Run migrations (includes app_config table)
   await runMigrations();
 
-  // 3. Ensure default organisation exists
+  // 3. Seed config from env → DB on first boot; subsequent boots load from DB
+  await configService.seedFromEnv();
+
+  const cfg = configService.getSprintConfig();
+
+  // 4. Ensure default organisation exists
   const orgId   = parseInt(process.env.ORGANISATION_ID || '1', 10);
   const orgName = process.env.ORGANISATION_NAME || cfg.sprintName || 'My Organisation';
   const { query } = require('./db');
@@ -74,7 +77,7 @@ async function boot() {
     [orgId, orgName, cfg.channelId || null, cfg.projectKey || null, process.env.JIRA_SITE_URL || null]
   );
 
-  // 4. Ensure active sprint exists
+  // 5. Ensure active sprint exists
   const window = getSprintWindow();
   const startDate = window.startStr;
   const endDate   = window.endStr;
@@ -84,14 +87,14 @@ async function boot() {
     if (sprint) await sprintRepo.setActive(sprint.id, orgId);
   }
 
-  // 5. Pre-sync team members from config into DB
+  // 6. Pre-sync team members from config into DB
   for (const m of cfg.teamMembers) {
     try {
       await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null, m.role || null);
     } catch (_) { /* non-fatal */ }
   }
 
-  // 6. Start Express
+  // 7. Start Express
   app.listen(PORT, () => {
     const activeSprint = sprint ? sprint.name : cfg.sprintName;
     console.log('');
@@ -109,7 +112,7 @@ async function boot() {
     console.log(`Automation-Hub running. Sprint: ${activeSprint}. Org: ${orgName}. DB: connected.`);
     console.log('');
 
-    // 7. Start cron jobs
+    // 8. Start cron jobs
     startCronJobs();
   });
 }

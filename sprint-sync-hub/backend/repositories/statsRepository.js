@@ -13,27 +13,33 @@ async function upsertDailyStats(organisationId, sprintId, memberId, statDate, fi
       deadlines_hit = 0,
       deadlines_missed = 0,
       jira_comments_added = 0,
+      bulk_post = false,
+      bulk_post_actual_date = null,
     } = fields;
 
     const { rows } = await db.query(
       `INSERT INTO member_daily_stats
          (organisation_id, sprint_id, member_id, stat_date,
           posted_standup, standup_post_id, tasks_completed, tasks_moved_forward,
-          deadlines_due, deadlines_hit, deadlines_missed, jira_comments_added)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          deadlines_due, deadlines_hit, deadlines_missed, jira_comments_added,
+          is_bulk_post, bulk_post_actual_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (organisation_id, sprint_id, member_id, stat_date) DO UPDATE SET
-         posted_standup      = GREATEST(member_daily_stats.posted_standup::int, EXCLUDED.posted_standup::int)::boolean,
-         standup_post_id     = COALESCE(EXCLUDED.standup_post_id, member_daily_stats.standup_post_id),
-         tasks_completed     = member_daily_stats.tasks_completed + EXCLUDED.tasks_completed,
-         tasks_moved_forward = member_daily_stats.tasks_moved_forward + EXCLUDED.tasks_moved_forward,
-         deadlines_due       = member_daily_stats.deadlines_due + EXCLUDED.deadlines_due,
-         deadlines_hit       = member_daily_stats.deadlines_hit + EXCLUDED.deadlines_hit,
-         deadlines_missed    = member_daily_stats.deadlines_missed + EXCLUDED.deadlines_missed,
-         jira_comments_added = member_daily_stats.jira_comments_added + EXCLUDED.jira_comments_added
+         posted_standup        = GREATEST(member_daily_stats.posted_standup::int, EXCLUDED.posted_standup::int)::boolean,
+         standup_post_id       = COALESCE(EXCLUDED.standup_post_id, member_daily_stats.standup_post_id),
+         tasks_completed       = member_daily_stats.tasks_completed + EXCLUDED.tasks_completed,
+         tasks_moved_forward   = member_daily_stats.tasks_moved_forward + EXCLUDED.tasks_moved_forward,
+         deadlines_due         = member_daily_stats.deadlines_due + EXCLUDED.deadlines_due,
+         deadlines_hit         = member_daily_stats.deadlines_hit + EXCLUDED.deadlines_hit,
+         deadlines_missed      = member_daily_stats.deadlines_missed + EXCLUDED.deadlines_missed,
+         jira_comments_added   = member_daily_stats.jira_comments_added + EXCLUDED.jira_comments_added,
+         is_bulk_post          = EXCLUDED.is_bulk_post OR member_daily_stats.is_bulk_post,
+         bulk_post_actual_date = COALESCE(EXCLUDED.bulk_post_actual_date, member_daily_stats.bulk_post_actual_date)
        RETURNING *`,
       [organisationId, sprintId, memberId, statDate,
        posted_standup, standup_post_id, tasks_completed, tasks_moved_forward,
-       deadlines_due, deadlines_hit, deadlines_missed, jira_comments_added]
+       deadlines_due, deadlines_hit, deadlines_missed, jira_comments_added,
+       bulk_post, bulk_post_actual_date]
     );
     return rows[0];
   } catch (err) {

@@ -12,7 +12,7 @@ const notifRepo        = require('./repositories/notificationRepository');
 const sprintRepo       = require('./repositories/sprintRepository');
 const memberRepo       = require('./repositories/memberRepository');
 const { getSprintWindow, toUnixTimestamp } = require('./utils/dateUtils');
-const { getSprintConfig } = require('./utils/sprintConfig');
+const configService = require('./services/configService');
 
 let lastSyncTs = null;
 
@@ -42,7 +42,7 @@ async function getActiveSprintId() {
 }
 
 async function runHuddleSync() {
-  const cfg = getSprintConfig();
+  const cfg = configService.getSprintConfig();
   const { start, end } = getSprintWindow();
   const orgId = getOrgId();
 
@@ -77,11 +77,42 @@ async function runHuddleSync() {
     if (!msg.text || !msg.user) continue;
     processed++;
 
-    const member    = cfg.teamMembers.find((m) => m.id === msg.user);
+    const member     = cfg.teamMembers.find((m) => m.id === msg.user);
     const memberName = member?.name || msg.user;
 
     try {
-      // Record standup in performance DB
+      // ── 1. Detect multi-date bulk posts ────────────────────────────────────
+      let isBulkPost  = false;
+      let bulkEntries = null;
+      try {
+        const multiDate = await claudeService.parseMultiDateStandup(msg.text, memberName);
+        if (multiDate) {
+          isBulkPost  = true;
+          bulkEntries = multiDate.entries;
+          // Record each past date as a standup post (late / bulk)
+          if (sprintId) {
+            for (const entry of bulkEntries) {
+              try {
+                const dbMember = await memberRepo.findOrCreate(orgId, member?.id || msg.user, memberName, member?.email || null, member?.role || null);
+                await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, entry.date, {
+                  posted_standup: true,
+                  bulk_post: true,
+                  bulk_post_actual_date: toDateStr(new Date(msg.ts * 1000 || Date.now())),
+                });
+              } catch (_) {}
+            }
+          }
+          activityLog.addEntry({
+            type: 'bulk_standup', userId: msg.user, userName: memberName,
+            slackMessageTs: msg.ts,
+            action: `Bulk standup: posted ${bulkEntries.length} days of updates in one message`,
+            success: true,
+            details: multiDate.note || `Dates: ${bulkEntries.map((e) => e.date).join(', ')}`,
+          });
+        }
+      } catch (_) { /* non-fatal */ }
+
+      // ── 2. Record standup in performance DB ────────────────────────────────
       let dbMember = null;
       if (sprintId) {
         try {
@@ -92,69 +123,58 @@ async function runHuddleSync() {
         }
       }
 
-      const analysis = await claudeService.matchHuddleToJira(msg.text, memberName, jiraTasks, cfg.sprintName);
+      // ── 3. Match to Jira ────────────────────────────────────────────────────
+      // For bulk posts, use the combined text for matching (best-effort)
+      const textToMatch = isBulkPost && bulkEntries
+        ? bulkEntries.map((e) => e.updates.join('\n')).join('\n')
+        : msg.text;
+
+      const analysis = await claudeService.matchHuddleToJira(textToMatch, memberName, jiraTasks, cfg.sprintName);
 
       if (analysis.matched && analysis.confidence >= 70 && analysis.issueKey) {
         matched++;
-        try {
-          await jiraService.addComment(analysis.issueKey, analysis.commentText);
-        } catch (e) {
-          console.error(`Huddle sync: addComment failed for ${analysis.issueKey}:`, e.message);
-        }
-        try {
-          await jiraService.transitionIssue(analysis.issueKey, analysis.suggestedStatus);
-        } catch (e) {
-          console.warn(`Huddle sync: transitionIssue skipped for ${analysis.issueKey}:`, e.message);
-        }
+        try { await jiraService.addComment(analysis.issueKey, analysis.commentText); }
+        catch (e) { console.error(`Huddle sync: addComment failed for ${analysis.issueKey}:`, e.message); }
+        try { await jiraService.transitionIssue(analysis.issueKey, analysis.suggestedStatus); }
+        catch (e) { console.warn(`Huddle sync: transitionIssue skipped for ${analysis.issueKey}:`, e.message); }
 
-        // Record Jira sync in performance DB
         if (sprintId && dbMember) {
           try {
             const { query } = require('./db');
-            const taskRes = await query(
-              'SELECT id FROM tasks WHERE organisation_id = $1 AND jira_key = $2',
-              [orgId, analysis.issueKey]
-            );
+            const taskRes = await query('SELECT id FROM tasks WHERE organisation_id = $1 AND jira_key = $2', [orgId, analysis.issueKey]);
             if (taskRes.rows.length > 0) {
-              await performanceService.recordJiraSync(
-                orgId, sprintId, dbMember.id, taskRes.rows[0].id,
-                null, analysis.suggestedStatus || 'In Progress', 'slack_sync'
-              );
+              await performanceService.recordJiraSync(orgId, sprintId, dbMember.id, taskRes.rows[0].id, null, analysis.suggestedStatus || 'In Progress', 'slack_sync');
             }
-          } catch (perfErr) {
-            console.error('[cron] recordJiraSync error:', perfErr.message);
-          }
+          } catch (perfErr) { console.error('[cron] recordJiraSync error:', perfErr.message); }
         }
 
         activityLog.addEntry({
           type: 'match', userId: msg.user, userName: memberName,
           slackMessageTs: msg.ts, jiraKey: analysis.issueKey,
-          action: `Matched to ${analysis.issueKey} (confidence: ${analysis.confidence}%)`,
+          action: `Matched to ${analysis.issueKey} (confidence: ${analysis.confidence}%)${isBulkPost ? ' [bulk post]' : ''}`,
           success: true, details: analysis.reason,
         });
       } else {
+        // ── 4. No match → send DM to update Jira ────────────────────────────
         noMatch++;
         const alreadyDMed = activityLog.recentDMExists(msg.user, 'no_match_dm');
         if (!alreadyDMed) {
           try {
-            const dmText = await claudeService.draftNoMatchDM(
-              memberName, msg.text,
-              process.env.JIRA_SITE_URL || '', cfg.projectKey, cfg.sprintName
-            );
+            const context = isBulkPost
+              ? `${msg.text}\n\n(Note: this update covered multiple days posted in bulk)`
+              : msg.text;
+            const dmText = await claudeService.draftNoMatchDM(memberName, context, process.env.JIRA_SITE_URL || '', cfg.projectKey, cfg.sprintName);
             await slackService.sendDM(msg.user, dmText);
 
             if (sprintId && dbMember) {
-              try {
-                await performanceService.recordNoMatchDM(orgId, sprintId, dbMember.id, msg.ts);
-              } catch (perfErr) {
-                console.error('[cron] recordNoMatchDM error:', perfErr.message);
-              }
+              try { await performanceService.recordNoMatchDM(orgId, sprintId, dbMember.id, msg.ts); }
+              catch (perfErr) { console.error('[cron] recordNoMatchDM error:', perfErr.message); }
             }
 
             activityLog.addEntry({
               type: 'no_match_dm', userId: msg.user, userName: memberName,
-              slackMessageTs: msg.ts, action: 'No-match DM sent', success: true,
-              details: `Confidence: ${analysis.confidence}%. ${analysis.reason}`,
+              slackMessageTs: msg.ts, action: 'No-match DM sent — please update Jira', success: true,
+              details: `Confidence: ${analysis.confidence}%. ${analysis.reason}${isBulkPost ? ' [bulk post detected]' : ''}`,
             });
           } catch (dmErr) {
             console.error(`Huddle sync: sendDM failed for ${msg.user}:`, dmErr.message);
@@ -162,6 +182,19 @@ async function runHuddleSync() {
           }
         }
       }
+
+      // ── 5. If bulk post, flag in performance that updates weren't daily ────
+      if (isBulkPost && sprintId && dbMember) {
+        try {
+          // Record today's standup as "bulk" so scoring knows it wasn't posted daily
+          const today = toDateStr(new Date());
+          await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, {
+            posted_standup: true,
+            bulk_post: true,
+          });
+        } catch (_) {}
+      }
+
     } catch (err) {
       errors++;
       console.error(`[${new Date().toISOString()}] Huddle sync: error processing message ${msg.ts}:`, err.message);
@@ -174,24 +207,32 @@ async function runHuddleSync() {
 }
 
 function startCronJobs() {
-  const cfg = getSprintConfig();
-  const tz  = cfg.timezone || 'UTC';
-  const { hour: eodHour, minute: eodMinute }       = parseTime(cfg.eodCheckTime);
-  const { hour: reportHour, minute: reportMinute } = parseTime(cfg.reportTime);
-  const reportDayNum = dayNameToNumber(cfg.reportDay);
+  const cfg = configService.getSprintConfig();
+  const tz  = cfg.timezone || 'Asia/Kolkata';
 
-  // Job 1: Huddle sync — every 30 min during business hours Mon-Fri
-  cron.schedule('*/30 8-20 * * 1-5', async () => {
-    console.log(`[${new Date().toISOString()}] Cron: running huddle sync`);
+  // Read schedule from DB-backed config (with live reload each time the job fires)
+  function getCfg()  { return configService.getSprintConfig(); }
+  function getTime(key, fallback) { return parseTime(getCfg()[key] || fallback); }
+
+  const { hour: syncHour,   minute: syncMinute }   = getTime('syncTime',   '10:00');
+  const { hour: eodHour,    minute: eodMinute }     = getTime('eodCheckTime','18:30');
+  const { hour: reportHour, minute: reportMinute }  = getTime('reportTime', '17:00');
+  const reportDayNum = dayNameToNumber(cfg.reportDay || 'Friday');
+
+  // Job 1: Huddle sync — daily at 10:00 AM (configurable via schedule.sync_time)
+  cron.schedule(`${syncMinute} ${syncHour} * * *`, async () => {
+    console.log(`[${new Date().toISOString()}] Cron: running daily huddle sync`);
     try { await runHuddleSync(); } catch (err) {
       console.error(`[${new Date().toISOString()}] Cron huddle sync crashed:`, err.message);
     }
   }, { timezone: tz });
 
+  console.log(`[cron] Job 1 (huddle sync) scheduled at ${syncHour}:${String(syncMinute).padStart(2,'0')} ${tz}`);
+
   // Job 2: Deadline check — 09:00 Mon-Fri
   cron.schedule('0 9 * * 1-5', async () => {
     console.log(`[${new Date().toISOString()}] Cron: running deadline check`);
-    const cfg2 = getSprintConfig();
+    const cfg2 = configService.getSprintConfig();
     const orgId = getOrgId();
     try {
       const sprintId = await getActiveSprintId();
@@ -221,10 +262,14 @@ function startCronJobs() {
     }
   }, { timezone: tz });
 
-  // Job 3: Missing update check — at EOD_CHECK_TIME Mon-Fri
+  console.log(`[cron] Job 3 (EOD reminder) scheduled at ${eodHour}:${String(eodMinute).padStart(2,'0')} ${tz} Mon-Fri`);
+
+  // Job 3: EOD reminder — 6:30 PM IST daily Mon-Fri (configurable via schedule.eod_time)
+  // Sends DMs to any team member who has NOT posted a standup today AND
+  // has no Jira-matched message — reminding them to update both Slack and Jira.
   cron.schedule(`${eodMinute} ${eodHour} * * 1-5`, async () => {
     console.log(`[${new Date().toISOString()}] Cron: running missing update check`);
-    const cfg3  = getSprintConfig();
+    const cfg3  = configService.getSprintConfig();
     const orgId = getOrgId();
     try {
       const todayStart = new Date();
@@ -232,40 +277,64 @@ function startCronJobs() {
       const messages = await slackService.getChannelMessages(
         cfg3.channelId, todayStart.getTime() / 1000, Date.now() / 1000
       );
-      const postedUserIds = new Set(messages.map((m) => m.user));
-      const today = toDateStr(new Date());
+      const postedUserIds  = new Set(messages.map((m) => m.user));
+      const matchedUserIds = new Set(
+        activityLog.getEntries(500)
+          .filter((e) => e.type === 'match' && e.timestamp > todayStart.toISOString())
+          .map((e) => e.userId)
+          .filter(Boolean)
+      );
+      const today    = toDateStr(new Date());
       const sprintId = await getActiveSprintId();
 
       for (const member of cfg3.teamMembers) {
-        if (postedUserIds.has(member.id)) continue;
+        const didPost    = postedUserIds.has(member.id);
+        const didMatch   = matchedUserIds.has(member.id);
+        const alreadyDMed = activityLog.recentDMExists(member.id, 'missing_update_dm');
+        if (alreadyDMed) continue;
+
         try {
-          const dmText = await claudeService.draftMissingUpdateDM(member.name, cfg3.channelId, cfg3.sprintName);
+          let dmText;
+          if (!didPost) {
+            // Member hasn't posted standup at all today
+            dmText = await claudeService.draftMissingUpdateDM(member.name, cfg3.channelId, cfg3.sprintName);
+            activityLog.addEntry({ type: 'missing_update_dm', userId: member.id, userName: member.name, action: 'Missing standup DM sent', success: true });
+          } else if (!didMatch) {
+            // Member posted but no Jira task was matched — remind to update Jira
+            const boardUrl = `${(process.env.JIRA_SITE_URL || '').replace(/\/$/, '')}/jira/software/projects/${cfg3.projectKey}/boards`;
+            dmText = `Hey ${member.name} 👋 Thanks for your standup today! I noticed I couldn't automatically match it to a Jira task in ${cfg3.sprintName}.\n\nCould you update your tasks on the board so the team has full visibility? → ${boardUrl}`;
+            activityLog.addEntry({ type: 'no_match_dm', userId: member.id, userName: member.name, action: 'EOD: no Jira match — asked to update tasks', success: true });
+          } else {
+            continue; // posted + matched — nothing to do
+          }
+
           await slackService.sendDM(member.id, dmText);
-          activityLog.addEntry({ type: 'missing_update_dm', userId: member.id, userName: member.name, action: 'Missing update DM sent', success: true });
 
           if (sprintId) {
             try {
               const dbMember = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
-              await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, { posted_standup: false });
-              await notifRepo.recordNotification(orgId, dbMember.id, 'missing_standup', 'dm', null);
+              if (!didPost) {
+                await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, { posted_standup: false });
+              }
+              await notifRepo.recordNotification(orgId, dbMember.id, didPost ? 'no_match_dm' : 'missing_standup', 'dm', null);
             } catch (perfErr) {
-              console.error('[cron] missing standup DB update error:', perfErr.message);
+              console.error('[cron] EOD DB update error:', perfErr.message);
             }
           }
         } catch (err) {
-          console.error(`Missing update check: error for ${member.name}:`, err.message);
-          activityLog.addEntry({ type: 'missing_update_dm', userId: member.id, userName: member.name, action: 'Missing update DM failed', success: false, details: err.message });
+          console.error(`EOD check: error for ${member.name}:`, err.message);
+          activityLog.addEntry({ type: 'missing_update_dm', userId: member.id, userName: member.name, action: 'EOD DM failed', success: false, details: err.message });
         }
       }
     } catch (err) {
-      console.error(`[${new Date().toISOString()}] Cron missing update check crashed:`, err.message);
+      console.error(`[${new Date().toISOString()}] Cron EOD check crashed:`, err.message);
     }
   }, { timezone: tz });
 
   // Job 4: Weekly report — on REPORT_DAY at REPORT_TIME
   cron.schedule(`${reportMinute} ${reportHour} * * ${reportDayNum}`, async () => {
     console.log(`[${new Date().toISOString()}] Cron: running weekly report`);
-    const cfg4  = getSprintConfig();
+    const cfg4  = configService.getSprintConfig();
     const orgId = getOrgId();
     const { start, end, startStr, endStr } = getSprintWindow();
 

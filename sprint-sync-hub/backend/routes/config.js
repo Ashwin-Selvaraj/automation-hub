@@ -1,69 +1,55 @@
 'use strict';
 
-const express = require('express');
-const router = express.Router();
-const { getSprintConfig, setSprintConfig, setTeamMembers } = require('../utils/sprintConfig');
+const express      = require('express');
+const router       = express.Router();
+const configService = require('../services/configService');
+const { mask }     = require('../services/cryptoService');
 const { getSprintWindow } = require('../utils/dateUtils');
 const slackService = require('../services/slackService');
-const jiraService = require('../services/jiraService');
+const jiraService  = require('../services/jiraService');
 const claudeService = require('../services/claudeService');
-const activityLog = require('../services/activityLog');
+const activityLog  = require('../services/activityLog');
+const memberRepo   = require('../repositories/memberRepository');
 
-/**
- * Masks a secret string, showing a few chars at each end.
- * e.g. "xoxb-123456789-abcdef" → "xoxb-••••cdef"
- * @param {string} val
- * @returns {string}
- */
-function maskSecret(val) {
-  if (!val || val.length < 8) return '••••••••';
-  const show = Math.min(6, Math.floor(val.length * 0.2));
-  return val.slice(0, show) + '••••' + val.slice(-4);
-}
+// ─── GET /api/config ──────────────────────────────────────────────────────────
 
-/**
- * GET /api/config
- * Returns public sprint configuration (no secrets).
- */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const cfg = getSprintConfig();
+    const cfg    = configService.getSprintConfig();
     const window = getSprintWindow();
     res.json({
-      sprintName: cfg.sprintName,
-      startDate: cfg.startDate,
+      sprintName:    cfg.sprintName,
+      startDate:     cfg.startDate,
       durationWeeks: cfg.durationWeeks,
-      endDate: window.endStr,
-      projectKey: cfg.projectKey,
-      channelId: cfg.channelId,
-      timezone: cfg.timezone,
-      eodCheckTime: cfg.eodCheckTime,
-      reportDay: cfg.reportDay,
-      reportTime: cfg.reportTime,
-      teamMembers: cfg.teamMembers,
-      jiraSiteUrl: process.env.JIRA_SITE_URL || '',
+      endDate:       window.endStr,
+      projectKey:    cfg.projectKey,
+      channelId:     cfg.channelId,
+      timezone:      cfg.timezone,
+      syncTime:      cfg.syncTime,
+      eodCheckTime:  cfg.eodCheckTime,
+      reportDay:     cfg.reportDay,
+      reportTime:    cfg.reportTime,
+      teamMembers:   cfg.teamMembers,
+      jiraSiteUrl:   cfg.jiraSiteUrl || process.env.JIRA_SITE_URL || '',
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * POST /api/config/sprint
- * Updates sprint name, start date, and duration in memory.
- * Body: { sprintName, startDate, durationWeeks }
- */
-router.post('/sprint', (req, res) => {
+// ─── POST /api/config/sprint ──────────────────────────────────────────────────
+
+router.post('/sprint', async (req, res) => {
   try {
     const { sprintName, startDate, durationWeeks } = req.body;
     if (!sprintName && !startDate && !durationWeeks) {
       return res.status(400).json({ error: 'Provide at least one field to update' });
     }
-    setSprintConfig({
-      ...(sprintName && { sprintName }),
-      ...(startDate && { startDate }),
-      ...(durationWeeks && { durationWeeks: parseInt(durationWeeks, 10) }),
-    });
+    const updates = {};
+    if (sprintName)     updates['sprint.name']           = sprintName;
+    if (startDate)      updates['sprint.start_date']     = startDate;
+    if (durationWeeks)  updates['sprint.duration_weeks'] = String(durationWeeks);
+    await configService.setMany(updates);
     const window = getSprintWindow();
     res.json({ ok: true, message: 'Sprint config updated', window });
   } catch (err) {
@@ -71,168 +57,161 @@ router.post('/sprint', (req, res) => {
   }
 });
 
-/**
- * POST /api/config/team
- * Replaces the team members list.
- * Body: { members: Array<{ id, name, initials, role? }> }
- */
-router.post('/team', (req, res) => {
+// ─── POST /api/config/team ────────────────────────────────────────────────────
+
+router.post('/team', async (req, res) => {
   try {
     const { members } = req.body;
     if (!Array.isArray(members)) {
       return res.status(400).json({ error: 'members must be an array' });
     }
 
-    // Diff old vs new to log additions and removals
-    const oldMembers = getSprintConfig().teamMembers || [];
+    // Diff old vs new to log changes
+    const oldMembers = configService.getSprintConfig().teamMembers || [];
     const oldIds = new Set(oldMembers.map((m) => m.id));
     const newIds = new Set(members.map((m) => m.id));
 
     oldMembers.forEach((m) => {
       if (!newIds.has(m.id)) {
-        activityLog.addEntry({
-          type: 'team_change',
-          userId: m.id,
-          userName: m.name,
-          action: `Removed from team`,
-          success: true,
-        });
+        activityLog.addEntry({ type: 'team_change', userId: m.id, userName: m.name, action: 'Removed from team', success: true });
       }
     });
-
     members.forEach((m) => {
       if (!oldIds.has(m.id)) {
-        activityLog.addEntry({
-          type: 'team_change',
-          userId: m.id,
-          userName: m.name,
-          action: `Added to team`,
-          success: true,
-        });
+        activityLog.addEntry({ type: 'team_change', userId: m.id, userName: m.name, action: 'Added to team', success: true });
       }
     });
 
-    setTeamMembers(members);
+    // Persist members to DB (members table)
+    const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+    for (const m of members) {
+      try {
+        await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null, m.role || null);
+      } catch (_) {}
+    }
+
+    // Also keep TEAM_MEMBERS env in sync (for backward-compat with sprintConfig)
+    process.env.TEAM_MEMBERS = JSON.stringify(members);
+
     res.json({ ok: true, message: 'Team members updated', members });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * GET /api/config/health
- * Tests all three service connections and returns their status.
- */
+// ─── GET /api/config/health ───────────────────────────────────────────────────
+
 router.get('/health', async (req, res) => {
   const errors = {};
+  const cfg    = configService.getSprintConfig();
 
   const [slackOk, jiraOk, claudeOk] = await Promise.all([
     slackService.testConnection().catch((e) => { errors.slack = e.message; return false; }),
-    jiraService.testConnection(getSprintConfig().projectKey).catch((e) => { errors.jira = e.message; return false; }),
+    jiraService.testConnection(cfg.projectKey).catch((e) => { errors.jira = e.message; return false; }),
     claudeService.testConnection().catch((e) => { errors.claude = e.message; return false; }),
   ]);
 
   res.json({ slack: slackOk, jira: jiraOk, claude: claudeOk, errors });
 });
 
-/**
- * GET /api/config/env-status
- * Returns which env vars are set. Secrets are masked — never sent in full.
- * Non-secret values are returned as-is so the frontend can pre-fill editable fields.
- * Covers every variable in .env.example.
- */
-router.get('/env-status', (req, res) => {
-  const e = process.env;
+// ─── GET /api/config/env-status ───────────────────────────────────────────────
+// Returns current config state (secrets masked) for the Connections UI.
 
-  // Parse team members with the same lenient logic as sprintConfig
-  let parsedTeam = [];
-  let teamParseError = false;
-  const rawTeam = e.TEAM_MEMBERS || '';
-  if (rawTeam.trim()) {
-    try {
-      const direct = JSON.parse(rawTeam);
-      parsedTeam = Array.isArray(direct) ? direct : [];
-    } catch {
-      try {
-        const cleaned = rawTeam
-          .replace(/\\\s*[\r\n]+\s*/g, '')
-          .replace(/[\r\n\t]/g, ' ')
-          .replace(/,\s*([}\]])/g, '$1')
-          .trim();
-        const fallback = JSON.parse(cleaned);
-        parsedTeam = Array.isArray(fallback) ? fallback : [];
-      } catch {
-        teamParseError = true;
-        parsedTeam = [];
-      }
-    }
+router.get('/env-status', async (req, res) => {
+  try {
+    // Team members — first try DB, fall back to env
+    const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+    let dbMembers = [];
+    try { dbMembers = await memberRepo.findAll(orgId); } catch (_) {}
+
+    const rawTeam = process.env.TEAM_MEMBERS || '';
+    let envMembers = [];
+    try { const p = JSON.parse(rawTeam); envMembers = Array.isArray(p) ? p : []; } catch (_) {}
+
+    const parsedTeam = dbMembers.length > 0
+      ? dbMembers.map((m) => ({ id: m.slack_id, name: m.name, role: m.role }))
+      : envMembers;
+
+    const isPlaceholder = parsedTeam.some((m) => m.id && m.id.startsWith('U00000000'));
+
+    // Config values from DB
+    const getV = (k) => configService.getSync(k);
+    const getSet = (k) => { const v = getV(k); return v != null && v !== ''; };
+    const getPreview = (k) => { const v = getV(k); return v ? mask(v) : null; };
+
+    res.json({
+      slack: {
+        botToken:      { set: getSet('slack.bot_token'),      secret: true,  preview: getPreview('slack.bot_token') },
+        channelId:     { set: getSet('slack.channel_id'),     secret: false, value:   getV('slack.channel_id') },
+        signingSecret: { set: getSet('slack.signing_secret'), secret: true,  preview: getPreview('slack.signing_secret') },
+      },
+      jira: {
+        email:      { set: getSet('jira.email'),       secret: false, value:   getV('jira.email') },
+        apiToken:   { set: getSet('jira.api_token'),   secret: true,  preview: getPreview('jira.api_token') },
+        siteUrl:    { set: getSet('jira.site_url'),    secret: false, value:   getV('jira.site_url') },
+        cloudId:    { set: getSet('jira.cloud_id'),    secret: false, value:   getV('jira.cloud_id') },
+        projectKey: { set: getSet('jira.project_key'), secret: false, value:   getV('jira.project_key') },
+      },
+      claude: {
+        apiKey: { set: getSet('claude.api_key'), secret: true, preview: getPreview('claude.api_key') },
+      },
+      schedule: {
+        timezone:       { set: getSet('schedule.timezone'),    secret: false, value: getV('schedule.timezone') },
+        syncTime:       { set: getSet('schedule.sync_time'),   secret: false, value: getV('schedule.sync_time') },
+        eodCheckTime:   { set: getSet('schedule.eod_time'),    secret: false, value: getV('schedule.eod_time') },
+        reportDay:      { set: getSet('schedule.report_day'),  secret: false, value: getV('schedule.report_day') },
+        reportTime:     { set: getSet('schedule.report_time'), secret: false, value: getV('schedule.report_time') },
+        managerSlackId: { set: getSet('schedule.manager_slack_id'), secret: false, value: getV('schedule.manager_slack_id') },
+      },
+      team: {
+        count:         parsedTeam.length,
+        members:       parsedTeam,
+        isPlaceholder,
+        rawSet:        rawTeam !== '' || dbMembers.length > 0,
+        parseError:    false,
+        source:        dbMembers.length > 0 ? 'database' : 'env',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  const teamIsPlaceholder = parsedTeam.some((m) => m.id && m.id.startsWith('U00000000'));
-
-  res.json({
-    slack: {
-      botToken:      { set: !!e.SLACK_BOT_TOKEN,      secret: true,  preview: e.SLACK_BOT_TOKEN      ? maskSecret(e.SLACK_BOT_TOKEN)      : null },
-      channelId:     { set: !!e.SLACK_CHANNEL_ID,     secret: false, value:   e.SLACK_CHANNEL_ID     || null },
-      signingSecret: { set: !!e.SLACK_SIGNING_SECRET, secret: true,  preview: e.SLACK_SIGNING_SECRET ? maskSecret(e.SLACK_SIGNING_SECRET) : null },
-    },
-    jira: {
-      email:      { set: !!e.JIRA_EMAIL,       secret: false, value:   e.JIRA_EMAIL       || null },
-      apiToken:   { set: !!e.JIRA_API_TOKEN,   secret: true,  preview: e.JIRA_API_TOKEN   ? maskSecret(e.JIRA_API_TOKEN)   : null },
-      siteUrl:    { set: !!e.JIRA_SITE_URL,    secret: false, value:   e.JIRA_SITE_URL    || null },
-      cloudId:    { set: !!e.JIRA_CLOUD_ID,    secret: false, value:   e.JIRA_CLOUD_ID    || null },
-      projectKey: { set: !!e.JIRA_PROJECT_KEY, secret: false, value:   e.JIRA_PROJECT_KEY || null },
-    },
-    claude: {
-      apiKey: { set: !!e.ANTHROPIC_API_KEY, secret: true, preview: e.ANTHROPIC_API_KEY ? maskSecret(e.ANTHROPIC_API_KEY) : null },
-    },
-    schedule: {
-      timezone:       { set: !!e.TIMEZONE,        secret: false, value: e.TIMEZONE        || null },
-      eodCheckTime:   { set: !!e.EOD_CHECK_TIME,  secret: false, value: e.EOD_CHECK_TIME  || null },
-      reportDay:      { set: !!e.REPORT_DAY,      secret: false, value: e.REPORT_DAY      || null },
-      reportTime:     { set: !!e.REPORT_TIME,     secret: false, value: e.REPORT_TIME     || null },
-      managerSlackId: { set: !!e.MANAGER_SLACK_ID, secret: false, value: e.MANAGER_SLACK_ID || null },
-    },
-    team: {
-      // Returns the parsed members array (non-secret) so the Team tab can pre-populate.
-      count:         parsedTeam.length,
-      members:       parsedTeam,
-      isPlaceholder: teamIsPlaceholder,
-      rawSet:        !!e.TEAM_MEMBERS,
-      parseError:    teamParseError,   // true when TEAM_MEMBERS is set but unparseable
-    },
-  });
 });
 
-/**
- * POST /api/config/connections
- * Updates any non-secret env value in the runtime config (no restart needed).
- * Secrets (tokens, API keys) must still be changed in .env + restart.
- * Body: any subset of the non-secret fields below.
- */
-router.post('/connections', (req, res) => {
+// ─── POST /api/config/connections ─────────────────────────────────────────────
+// Saves non-secret (and optionally secret) config values to DB.
+
+router.post('/connections', async (req, res) => {
   try {
     const {
-      channelId, jiraEmail, jiraSiteUrl, jiraCloudId, projectKey,
-      timezone, eodCheckTime, reportDay, reportTime, managerSlackId,
+      // Slack
+      channelId, botToken, signingSecret,
+      // Jira
+      jiraEmail, jiraSiteUrl, jiraCloudId, projectKey, jiraApiToken,
+      // Claude
+      anthropicApiKey,
+      // Schedule
+      timezone, syncTime, eodCheckTime, reportDay, reportTime, managerSlackId,
     } = req.body;
 
-    // Propagate every provided value into runtime env + sprintConfig overrides
     const updates = {};
-    if (channelId     != null) { process.env.SLACK_CHANNEL_ID   = channelId;     updates.channelId = channelId; }
-    if (jiraEmail     != null) { process.env.JIRA_EMAIL          = jiraEmail;     updates.jiraEmail = jiraEmail; }
-    if (jiraSiteUrl   != null) { process.env.JIRA_SITE_URL       = jiraSiteUrl;   updates.jiraSiteUrl = jiraSiteUrl; }
-    if (jiraCloudId   != null) { process.env.JIRA_CLOUD_ID       = jiraCloudId;   updates.jiraCloudId = jiraCloudId; }
-    if (projectKey    != null) { updates.projectKey    = projectKey; }
-    if (timezone      != null) { updates.timezone      = timezone; }
-    if (eodCheckTime  != null) { updates.eodCheckTime  = eodCheckTime; }
-    if (reportDay     != null) { updates.reportDay     = reportDay; }
-    if (reportTime    != null) { updates.reportTime    = reportTime; }
-    if (managerSlackId != null){ updates.managerSlackId = managerSlackId; }
+    if (channelId       != null) updates['slack.channel_id']          = channelId;
+    if (botToken        != null) updates['slack.bot_token']           = botToken;
+    if (signingSecret   != null) updates['slack.signing_secret']      = signingSecret;
+    if (jiraEmail       != null) updates['jira.email']                = jiraEmail;
+    if (jiraApiToken    != null) updates['jira.api_token']            = jiraApiToken;
+    if (jiraSiteUrl     != null) updates['jira.site_url']             = jiraSiteUrl;
+    if (jiraCloudId     != null) updates['jira.cloud_id']             = jiraCloudId;
+    if (projectKey      != null) updates['jira.project_key']          = projectKey;
+    if (anthropicApiKey != null) updates['claude.api_key']            = anthropicApiKey;
+    if (timezone        != null) updates['schedule.timezone']         = timezone;
+    if (syncTime        != null) updates['schedule.sync_time']        = syncTime;
+    if (eodCheckTime    != null) updates['schedule.eod_time']         = eodCheckTime;
+    if (reportDay       != null) updates['schedule.report_day']       = reportDay;
+    if (reportTime      != null) updates['schedule.report_time']      = reportTime;
+    if (managerSlackId  != null) updates['schedule.manager_slack_id'] = managerSlackId;
 
-    // Batch all schedule + sprint-config overrides through sprintConfig
-    if (Object.keys(updates).length) setSprintConfig(updates);
-
-    res.json({ ok: true, updated: updates });
+    await configService.setMany(updates);
+    res.json({ ok: true, updated: Object.keys(updates) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -260,6 +260,66 @@ Return only the formatted report, no extra text.`,
 }
 
 /**
+ * Detects whether a Slack message contains multi-date standup updates (bulk posting).
+ * If yes, returns an array of { date, updates[] } objects.
+ * If no, returns null (treat as a single-day message).
+ *
+ * @param {string} messageText
+ * @param {string} memberName
+ * @returns {Promise<Array<{ date: string, updates: string[] }> | null>}
+ */
+async function parseMultiDateStandup(messageText, memberName) {
+  try {
+    const client = getClient();
+
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 1500,
+      system: 'You are a standup message parser. Detect if a message contains updates for multiple dates (bulk posting). Respond ONLY with valid JSON.',
+      messages: [{
+        role: 'user',
+        content: `Analyze this standup message from ${memberName}:
+
+"""
+${messageText}
+"""
+
+Does this message contain updates for MULTIPLE dates? Look for date patterns like "25/5/2026", "25 May", "Monday", "Yesterday", etc. as section headers.
+
+If YES (multi-date bulk post), respond with:
+{
+  "isMultiDate": true,
+  "entries": [
+    { "date": "YYYY-MM-DD", "updates": ["update 1", "update 2"] },
+    ...
+  ],
+  "note": "Posted X days of updates in a single message on [actual post date]"
+}
+
+If NO (single day update), respond with:
+{
+  "isMultiDate": false,
+  "entries": null
+}
+
+Today's date for reference: ${new Date().toISOString().split('T')[0]}
+Only use confirmed dates from the message. Do not invent dates. Respond with JSON only.`,
+      }],
+    });
+
+    const text = res.content[0]?.text || '{}';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.isMultiDate || !Array.isArray(parsed.entries)) return null;
+    return { entries: parsed.entries, note: parsed.note || '' };
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] claudeService.parseMultiDateStandup error:`, err.message);
+    return null; // non-fatal — fall back to treating as single-day
+  }
+}
+
+/**
  * Tests the Anthropic API connection with a minimal request.
  * @returns {Promise<boolean>}
  */
@@ -283,5 +343,6 @@ module.exports = {
   draftMissingUpdateDM,
   draftDeadlineDM,
   generateWeeklyReport,
+  parseMultiDateStandup,
   testConnection,
 };

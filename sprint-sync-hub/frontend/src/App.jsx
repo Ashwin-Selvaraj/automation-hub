@@ -74,7 +74,7 @@ export default function App() {
 
   const all      = health?.slack && health?.jira && health?.claude;
   const dotColor = healthLoading ? colors.gray400 : all ? colors.green600 : colors.red600;
-  const tabProps = { config, setConfig };
+  const tabProps = { config, setConfig, navigate: (id) => { setActive(id); if (mobile) setMobileOpen(false); } };
 
   function navigate(id) { setActive(id); if (mobile) setMobileOpen(false); }
 
