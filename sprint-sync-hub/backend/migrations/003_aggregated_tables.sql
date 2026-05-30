@@ -1,0 +1,63 @@
+CREATE TABLE IF NOT EXISTS member_daily_stats (
+  id                   SERIAL PRIMARY KEY,
+  organisation_id      INTEGER REFERENCES organisations(id) ON DELETE CASCADE,
+  sprint_id            INTEGER REFERENCES sprints(id) ON DELETE CASCADE,
+  member_id            INTEGER REFERENCES members(id) ON DELETE CASCADE,
+  stat_date            DATE NOT NULL,
+  posted_standup       BOOLEAN DEFAULT false,
+  standup_post_id      INTEGER REFERENCES standup_posts(id),
+  tasks_completed      INTEGER DEFAULT 0,
+  tasks_moved_forward  INTEGER DEFAULT 0,
+  deadlines_due        INTEGER DEFAULT 0,
+  deadlines_hit        INTEGER DEFAULT 0,
+  deadlines_missed     INTEGER DEFAULT 0,
+  jira_comments_added  INTEGER DEFAULT 0,
+  UNIQUE(organisation_id, sprint_id, member_id, stat_date)
+);
+
+CREATE TABLE IF NOT EXISTS member_sprint_summary (
+  id                        SERIAL PRIMARY KEY,
+  organisation_id           INTEGER REFERENCES organisations(id) ON DELETE CASCADE,
+  sprint_id                 INTEGER REFERENCES sprints(id) ON DELETE CASCADE,
+  member_id                 INTEGER REFERENCES members(id) ON DELETE CASCADE,
+  standup_days_posted       INTEGER DEFAULT 0,
+  standup_days_expected     INTEGER DEFAULT 0,
+  standup_streak_max        INTEGER DEFAULT 0,
+  standup_streak_current    INTEGER DEFAULT 0,
+  tasks_assigned            INTEGER DEFAULT 0,
+  tasks_completed           INTEGER DEFAULT 0,
+  tasks_in_progress         INTEGER DEFAULT 0,
+  tasks_not_started         INTEGER DEFAULT 0,
+  completion_rate           NUMERIC(5,2) DEFAULT 0,
+  deadlines_total           INTEGER DEFAULT 0,
+  deadlines_hit             INTEGER DEFAULT 0,
+  deadlines_missed          INTEGER DEFAULT 0,
+  deadlines_extended        INTEGER DEFAULT 0,
+  deadline_hit_rate         NUMERIC(5,2) DEFAULT 0,
+  avg_days_overdue          NUMERIC(5,2) DEFAULT 0,
+  slack_messages_processed  INTEGER DEFAULT 0,
+  jira_auto_updates         INTEGER DEFAULT 0,
+  no_match_dms_received     INTEGER DEFAULT 0,
+  tasks_created_after_dm    INTEGER DEFAULT 0,
+  performance_score         NUMERIC(5,2) DEFAULT 0,
+  computed_at               TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(organisation_id, sprint_id, member_id)
+);
+
+CREATE TABLE IF NOT EXISTS member_overall_stats (
+  id                      SERIAL PRIMARY KEY,
+  organisation_id         INTEGER REFERENCES organisations(id) ON DELETE CASCADE,
+  member_id               INTEGER REFERENCES members(id) ON DELETE CASCADE,
+  sprints_participated    INTEGER DEFAULT 0,
+  total_tasks_completed   INTEGER DEFAULT 0,
+  total_deadlines_hit     INTEGER DEFAULT 0,
+  total_deadlines_missed  INTEGER DEFAULT 0,
+  total_standup_posts     INTEGER DEFAULT 0,
+  avg_performance_score   NUMERIC(5,2) DEFAULT 0,
+  best_sprint_score       NUMERIC(5,2) DEFAULT 0,
+  best_sprint_id          INTEGER REFERENCES sprints(id),
+  current_standup_streak  INTEGER DEFAULT 0,
+  longest_ever_streak     INTEGER DEFAULT 0,
+  last_updated            TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(organisation_id, member_id)
+);

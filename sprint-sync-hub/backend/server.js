@@ -2,35 +2,35 @@
 
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const cors    = require('cors');
 const { getSprintWindow } = require('./utils/dateUtils');
 const { getSprintConfig } = require('./utils/sprintConfig');
-const { startCronJobs } = require('./cron');
+const { startCronJobs }   = require('./cron');
+const { testConnection, runMigrations } = require('./db');
+const sprintRepo   = require('./repositories/sprintRepository');
+const memberRepo   = require('./repositories/memberRepository');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logger
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// Routes
-app.use('/api/config', require('./routes/config'));
-app.use('/api/slack', require('./routes/slack'));
-app.use('/api/jira', require('./routes/jira'));
-app.use('/api/sync', require('./routes/sync'));
-app.use('/api/report', require('./routes/report'));
+app.use('/api/config',      require('./routes/config'));
+app.use('/api/slack',       require('./routes/slack'));
+app.use('/api/jira',        require('./routes/jira'));
+app.use('/api/sync',        require('./routes/sync'));
+app.use('/api/report',      require('./routes/report'));
+app.use('/api/performance', require('./routes/performance'));
 
-// Health check
 app.get('/api/health', (req, res) => {
-  const cfg = getSprintConfig();
+  const cfg    = getSprintConfig();
   const window = getSprintWindow();
   res.json({
     status: 'ok',
@@ -42,34 +42,81 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
   console.error(`[${new Date().toISOString()}] Unhandled error:`, err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
+async function boot() {
   const cfg = getSprintConfig();
+
+  // 1. Connect to database
+  await testConnection();
+
+  // 2. Run migrations
+  await runMigrations();
+
+  // 3. Ensure default organisation exists
+  const orgId   = parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const orgName = process.env.ORGANISATION_NAME || cfg.sprintName || 'My Organisation';
+  const { query } = require('./db');
+  await query(
+    `INSERT INTO organisations (id, name, slack_channel_id, jira_project_key, jira_site_url)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id) DO UPDATE
+       SET slack_channel_id = COALESCE(EXCLUDED.slack_channel_id, organisations.slack_channel_id),
+           jira_project_key = COALESCE(EXCLUDED.jira_project_key, organisations.jira_project_key),
+           jira_site_url    = COALESCE(EXCLUDED.jira_site_url,    organisations.jira_site_url)`,
+    [orgId, orgName, cfg.channelId || null, cfg.projectKey || null, process.env.JIRA_SITE_URL || null]
+  );
+
+  // 4. Ensure active sprint exists
   const window = getSprintWindow();
+  const startDate = window.startStr;
+  const endDate   = window.endStr;
+  let sprint = await sprintRepo.getActiveSprint(orgId);
+  if (!sprint) {
+    sprint = await sprintRepo.upsertSprint(orgId, cfg.sprintName, startDate, endDate, cfg.durationWeeks);
+    if (sprint) await sprintRepo.setActive(sprint.id, orgId);
+  }
 
-  console.log('');
-  console.log('╔════════════════════════════════════════╗');
-  console.log('║       Sprint-Sync Hub — Backend        ║');
-  console.log('╚════════════════════════════════════════╝');
-  console.log(`  Port:       ${PORT}`);
-  console.log(`  Sprint:     ${cfg.sprintName}`);
-  console.log(`  Window:     ${window.startStr} → ${window.endStr}`);
-  console.log(`  Project:    ${cfg.projectKey}`);
-  console.log(`  Channel:    ${cfg.channelId || '(not set)'}`);
-  console.log(`  Timezone:   ${cfg.timezone}`);
-  console.log('');
+  // 5. Pre-sync team members from config into DB
+  for (const m of cfg.teamMembers) {
+    try {
+      await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null, m.role || null);
+    } catch (_) { /* non-fatal */ }
+  }
 
-  startCronJobs();
+  // 6. Start Express
+  app.listen(PORT, () => {
+    const activeSprint = sprint ? sprint.name : cfg.sprintName;
+    console.log('');
+    console.log('╔════════════════════════════════════════╗');
+    console.log('║       Automation-Hub — Backend        ║');
+    console.log('╚════════════════════════════════════════╝');
+    console.log(`  Port:       ${PORT}`);
+    console.log(`  Sprint:     ${activeSprint}`);
+    console.log(`  Window:     ${startDate} → ${endDate}`);
+    console.log(`  Project:    ${cfg.projectKey}`);
+    console.log(`  Channel:    ${cfg.channelId || '(not set)'}`);
+    console.log(`  Timezone:   ${cfg.timezone}`);
+    console.log(`  DB:         connected`);
+    console.log('');
+    console.log(`Automation-Hub running. Sprint: ${activeSprint}. Org: ${orgName}. DB: connected.`);
+    console.log('');
+
+    // 7. Start cron jobs
+    startCronJobs();
+  });
+}
+
+boot().catch((err) => {
+  console.error('[boot] Fatal startup error:', err.message);
+  process.exit(1);
 });
 
 module.exports = app;

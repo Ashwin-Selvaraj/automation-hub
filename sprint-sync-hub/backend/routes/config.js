@@ -7,6 +7,7 @@ const { getSprintWindow } = require('../utils/dateUtils');
 const slackService = require('../services/slackService');
 const jiraService = require('../services/jiraService');
 const claudeService = require('../services/claudeService');
+const activityLog = require('../services/activityLog');
 
 /**
  * Masks a secret string, showing a few chars at each end.
@@ -81,6 +82,36 @@ router.post('/team', (req, res) => {
     if (!Array.isArray(members)) {
       return res.status(400).json({ error: 'members must be an array' });
     }
+
+    // Diff old vs new to log additions and removals
+    const oldMembers = getSprintConfig().teamMembers || [];
+    const oldIds = new Set(oldMembers.map((m) => m.id));
+    const newIds = new Set(members.map((m) => m.id));
+
+    oldMembers.forEach((m) => {
+      if (!newIds.has(m.id)) {
+        activityLog.addEntry({
+          type: 'team_change',
+          userId: m.id,
+          userName: m.name,
+          action: `Removed from team`,
+          success: true,
+        });
+      }
+    });
+
+    members.forEach((m) => {
+      if (!oldIds.has(m.id)) {
+        activityLog.addEntry({
+          type: 'team_change',
+          userId: m.id,
+          userName: m.name,
+          action: `Added to team`,
+          success: true,
+        });
+      }
+    });
+
     setTeamMembers(members);
     res.json({ ok: true, message: 'Team members updated', members });
   } catch (err) {

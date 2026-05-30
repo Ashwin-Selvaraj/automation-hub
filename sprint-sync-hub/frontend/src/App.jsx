@@ -5,18 +5,20 @@ import OverviewTab    from './tabs/OverviewTab.jsx';
 import ConnectionsTab from './tabs/ConnectionsTab.jsx';
 import TeamTab        from './tabs/TeamTab.jsx';
 import SprintTab      from './tabs/SprintTab.jsx';
-import SyncTab        from './tabs/SyncTab.jsx';
-import ReportTab      from './tabs/ReportTab.jsx';
+import SyncTab         from './tabs/SyncTab.jsx';
+import PerformanceTab  from './tabs/PerformanceTab.jsx';
+import ReportTab       from './tabs/ReportTab.jsx';
 
 const { colors, fonts } = theme;
 
 const NAV = [
   { id: 'overview',    label: 'Overview'     },
-  { id: 'connections', label: 'Connections'  },
-  { id: 'team',        label: 'Team'         },
   { id: 'sprint',      label: 'Sprint'       },
   { id: 'sync',        label: 'Sync'         },
+  { id: 'performance', label: 'Performance'  },
   { id: 'report',      label: 'Report'       },
+  { id: 'connections', label: 'Connections'  },
+  { id: 'team',        label: 'Team'         },
 ];
 
 function useWindowWidth() {
@@ -59,8 +61,8 @@ export default function App() {
   const [health, setHealth]         = useState(null);
   const [healthLoading, setHL]      = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const width   = useWindowWidth();
-  const mobile  = width < 768;
+  const width  = useWindowWidth();
+  const mobile = width < 768;
 
   useEffect(() => {
     getConfig().then(setConfig).catch(console.error);
@@ -78,7 +80,7 @@ export default function App() {
 
   const sidebar = (
     <nav style={{
-      width: mobile ? 220 : 220, background: colors.gray50,
+      width: 220, background: colors.gray50,
       borderRight: `1px solid ${colors.gray200}`,
       display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
       padding: '16px 0',
@@ -113,12 +115,11 @@ export default function App() {
               ☰
             </button>
           )}
-          {/* Shield logo mark */}
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
             <path d="M12 2L4 5.5V11c0 5.25 3.5 9.65 8 11 4.5-1.35 8-5.75 8-11V5.5L12 2z" fill={colors.blue600} />
             <path d="M8.5 11.5l2.5 2.5 4.5-4.5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span style={{ fontSize: 15, fontWeight: 700, color: colors.blue600, letterSpacing: '-0.01em' }}>Sprint-Sync</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: colors.blue600, letterSpacing: '-0.01em' }}>Automation-Hub</span>
           <span style={{ color: colors.gray200, fontSize: 14, padding: '0 2px' }}>·</span>
           <span style={{ fontSize: 14, color: colors.gray400 }}>{config?.sprintName || '—'}</span>
         </div>
@@ -146,6 +147,7 @@ export default function App() {
             {active === 'team'        && <TeamTab        {...tabProps} />}
             {active === 'sprint'      && <SprintTab      {...tabProps} />}
             {active === 'sync'        && <SyncTab        {...tabProps} />}
+            {active === 'performance' && <PerformanceTab {...tabProps} />}
             {active === 'report'      && <ReportTab      {...tabProps} />}
           </div>
         </main>

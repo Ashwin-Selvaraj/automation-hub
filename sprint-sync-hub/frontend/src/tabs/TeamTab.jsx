@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { theme, styles } from '../theme.js';
 import { postTeamMembers, getEnvStatus } from '../api.js';
 import Card, { SectionHeader } from '../components/Card.jsx';
@@ -15,19 +15,13 @@ function getInitials(name) {
   return name.trim().split(/\s+/).map((w) => w[0] || '').join('').toUpperCase().slice(0, 2) || '??';
 }
 
-function toEnvLine(members) {
-  return 'TEAM_MEMBERS=' + JSON.stringify(
-    members.map(({ id, name, initials, role }) =>
-      Object.fromEntries(Object.entries({ id, name, initials, role }).filter(([, v]) => v))
-    )
-  );
-}
-
 function parseBulkText(text) {
   const cleaned = text.replace(/\\\s*[\r\n]+\s*/g, '').replace(/,\s*([}\]])/g, '$1').trim();
   const jsonPart = cleaned.startsWith('TEAM_MEMBERS') ? cleaned.replace(/^TEAM_MEMBERS\s*=\s*/, '') : cleaned;
   return JSON.parse(jsonPart);
 }
+
+// ─── Bulk Import Panel ────────────────────────────────────────────────────────
 
 function BulkImportPanel({ onImport, saving }) {
   const [text,    setText]    = useState('');
@@ -53,7 +47,7 @@ function BulkImportPanel({ onImport, saving }) {
     <div style={{ marginBottom: 20, padding: '16px 20px', background: colors.gray50, borderRadius: 6, border: `1px solid ${colors.gray200}` }}>
       <p style={{ fontSize: 13, fontWeight: 500, color: colors.gray900, marginBottom: 4 }}>Bulk Import from JSON</p>
       <p style={{ fontSize: 12, color: colors.gray600, marginBottom: 12 }}>
-        Paste a JSON array or the full <code style={{ fontFamily: fonts.mono, background: colors.gray100, padding: '1px 4px', borderRadius: 3 }}>TEAM_MEMBERS=[…]</code> line. Trailing backslashes and commas are auto-cleaned.
+        Paste a JSON array or the full <code style={{ fontFamily: fonts.mono, background: colors.gray100, padding: '1px 4px', borderRadius: 3 }}>TEAM_MEMBERS=[…]</code> line.
       </p>
       <textarea
         value={text} onChange={(e) => { setText(e.target.value); setError(''); setPreview([]); }}
@@ -89,6 +83,8 @@ function BulkImportPanel({ onImport, saving }) {
     </div>
   );
 }
+
+// ─── Add Member Form ──────────────────────────────────────────────────────────
 
 function AddMemberForm({ onSave, onCancel, saving, error }) {
   const [name, setName] = useState('');
@@ -128,24 +124,58 @@ function AddMemberForm({ onSave, onCancel, saving, error }) {
   );
 }
 
+// ─── Member Row — each row owns its own confirming state ─────────────────────
+
+const MemberRow = React.memo(function MemberRow({ m, isLast, onRemove }) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <tr style={{ borderBottom: isLast ? 'none' : `1px solid ${colors.gray100}` }}>
+      <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Avatar initials={m.initials || getInitials(m.name)} size={28} />
+          <span style={{ fontSize: 14, fontWeight: 500, color: colors.gray900 }}>{m.name}</span>
+        </div>
+      </td>
+      <td style={{ padding: '10px 12px', fontFamily: fonts.mono, fontSize: 12, color: colors.gray400, verticalAlign: 'middle' }}>{m.id}</td>
+      <td style={{ padding: '10px 12px', fontSize: 13, color: colors.gray600, verticalAlign: 'middle' }}>{m.role || '—'}</td>
+      <td style={{ padding: '10px 12px', verticalAlign: 'middle', width: 160, minWidth: 160 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <Button variant="danger" size="sm" onClick={() => confirming ? (setConfirming(false), onRemove(m.id)) : setConfirming(true)}>
+            Remove
+          </Button>
+          {confirming && (
+            <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+});
+
+// ─── Main Tab ─────────────────────────────────────────────────────────────────
+
 export default function TeamTab({ config, setConfig }) {
-  const [members, setMembers] = useState(() => config?.teamMembers || []);
-  const [envInfo, setEnvInfo] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [showBulk, setShowBulk] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  const [showSnippet, setShowSnippet] = useState(false);
-  const [snippetCopied, setSnippetCopied] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState('');
+  const [members,   setMembers]   = useState(() => config?.teamMembers || []);
+  const [envInfo,   setEnvInfo]   = useState(null);
+  const [loading,   setLoading]   = useState(true);
+  const [showBulk,  setShowBulk]  = useState(false);
+  const [showForm,  setShowForm]  = useState(false);
+  const [saving,    setSaving]    = useState(false);
+  const [saveMsg,   setSaveMsg]   = useState('');
   const [formError, setFormError] = useState('');
 
-  useEffect(() => { if (config?.teamMembers !== undefined) setMembers(config.teamMembers); }, [config]);
+  const membersRef = useRef(members);
+  useEffect(() => { membersRef.current = members; }, [members]);
+
+  useEffect(() => {
+    if (config?.teamMembers !== undefined) setMembers(config.teamMembers);
+  }, [config]);
 
   useEffect(() => {
     getEnvStatus().then((s) => {
-      const t = s?.team ?? null; setEnvInfo(t);
+      const t = s?.team ?? null;
+      setEnvInfo(t);
       if (t?.members?.length && !t.isPlaceholder && !t.parseError) {
         setMembers((prev) => (prev.length === 0 ? t.members : prev));
         setConfig?.((c) => c ? { ...c, teamMembers: t.members } : c);
@@ -157,17 +187,20 @@ export default function TeamTab({ config, setConfig }) {
     setSaving(true); setFormError('');
     try {
       await postTeamMembers(updated);
-      setMembers(updated); setConfig?.((c) => ({ ...c, teamMembers: updated }));
-      setSaveMsg('Saved'); setTimeout(() => setSaveMsg(''), 2500);
-    } catch (e) { setFormError(e.message); }
-    finally { setSaving(false); }
+      setMembers(updated);
+      setConfig?.((c) => ({ ...c, teamMembers: updated }));
+      setSaveMsg('Saved');
+      setTimeout(() => setSaveMsg(''), 2500);
+    } catch (e) {
+      setFormError(e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function copySnippet() {
-    navigator.clipboard.writeText(toEnvLine(members)).then(() => {
-      setSnippetCopied(true); setTimeout(() => setSnippetCopied(false), 2500);
-    });
-  }
+  const handleRemove = useCallback((id) => {
+    persistMembers(membersRef.current.filter((x) => x.id !== id));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fromEnv = envInfo?.rawSet && !envInfo?.isPlaceholder && !envInfo?.parseError && envInfo?.count > 0;
 
@@ -181,12 +214,12 @@ export default function TeamTab({ config, setConfig }) {
       {!loading && envInfo?.parseError && (
         <div style={{ padding: '12px 16px', background: colors.red50, border: `1px solid #FCA5A5`, borderRadius: 6 }}>
           <p style={{ fontSize: 13, fontWeight: 500, color: colors.red600 }}>TEAM_MEMBERS in backend/.env could not be parsed</p>
-          <p style={{ fontSize: 12, color: colors.gray600, marginTop: 4 }}>Use Bulk Import below — paste your JSON, click Import, then copy the generated .env snippet.</p>
+          <p style={{ fontSize: 12, color: colors.gray600, marginTop: 4 }}>Use Bulk Import below to fix it.</p>
         </div>
       )}
       {!loading && envInfo?.isPlaceholder && (
         <div style={{ padding: '12px 16px', background: colors.amber50, border: `1px solid #FCD34D`, borderRadius: 6 }}>
-          <p style={{ fontSize: 12, color: colors.amber600 }}>TEAM_MEMBERS still has placeholder IDs (U00000000…). Replace with real Slack user IDs.</p>
+          <p style={{ fontSize: 12, color: colors.amber600 }}>TEAM_MEMBERS still has placeholder IDs. Replace with real Slack user IDs.</p>
         </div>
       )}
       {!loading && fromEnv && (
@@ -202,18 +235,30 @@ export default function TeamTab({ config, setConfig }) {
             {saveMsg && <span style={{ marginLeft: 10, fontSize: 12, color: colors.green600 }}>{saveMsg}</span>}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="secondary" size="sm" onClick={() => { setShowBulk(!showBulk); setShowForm(false); }}>
+            <Button variant="secondary" size="sm" onClick={() => { setShowBulk((v) => !v); setShowForm(false); }}>
               {showBulk ? 'Close import' : 'Bulk Import'}
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setShowForm(!showForm); setShowBulk(false); setFormError(''); }}>
+            <Button variant="secondary" size="sm" onClick={() => { setShowForm((v) => !v); setShowBulk(false); setFormError(''); }}>
               {showForm ? 'Cancel' : '+ Add Member'}
             </Button>
           </div>
         </div>
 
         <div style={{ padding: '16px 20px' }}>
-          {showBulk && <BulkImportPanel saving={saving} onImport={(m) => { persistMembers(m); setShowBulk(false); }} />}
-          {showForm  && <AddMemberForm saving={saving} error={formError} onCancel={() => setShowForm(false)} onSave={(m) => { persistMembers([...members, m]); setShowForm(false); }} />}
+          {showBulk && (
+            <BulkImportPanel
+              saving={saving}
+              onImport={(m) => { persistMembers(m); setShowBulk(false); }}
+            />
+          )}
+          {showForm && (
+            <AddMemberForm
+              saving={saving}
+              error={formError}
+              onCancel={() => setShowForm(false)}
+              onSave={(m) => { persistMembers([...members, m]); setShowForm(false); }}
+            />
+          )}
 
           {members.length === 0 && !loading ? (
             <div style={{ padding: '32px 0', textAlign: 'center' }}>
@@ -225,62 +270,30 @@ export default function TeamTab({ config, setConfig }) {
               <thead>
                 <tr>
                   {['Member', 'Slack ID', 'Role', 'Actions'].map((h) => (
-                    <th key={h} style={{ fontSize: 11, fontWeight: 600, color: colors.gray600, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '8px 12px', borderBottom: `1px solid ${colors.gray200}`, textAlign: 'left' }}>{h}</th>
+                    <th key={h} style={{
+                      fontSize: 11, fontWeight: 600, color: colors.gray600,
+                      textTransform: 'uppercase', letterSpacing: '0.05em',
+                      padding: '8px 12px', borderBottom: `1px solid ${colors.gray200}`,
+                      textAlign: 'left',
+                      ...(h === 'Actions' ? { width: 160, minWidth: 160 } : {}),
+                    }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {members.map((m, i) => (
-                  <tr key={m.id} style={{ borderBottom: i < members.length - 1 ? `1px solid ${colors.gray100}` : 'none' }}>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Avatar initials={m.initials || getInitials(m.name)} size={28} />
-                        <span style={{ fontSize: 14, fontWeight: 500, color: colors.gray900 }}>{m.name}</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 12px', fontFamily: fonts.mono, fontSize: 12, color: colors.gray400, verticalAlign: 'middle' }}>{m.id}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 13, color: colors.gray600, verticalAlign: 'middle' }}>{m.role || '—'}</td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
-                      {confirmRemove === m.id ? (
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <Button variant="danger" size="sm" onClick={() => { setConfirmRemove(null); persistMembers(members.filter((x) => x.id !== m.id)); }}>Remove</Button>
-                          <Button variant="secondary" size="sm" onClick={() => setConfirmRemove(null)}>Cancel</Button>
-                        </div>
-                      ) : (
-                        <Button variant="danger" size="sm" onClick={() => setConfirmRemove(m.id)}>Remove</Button>
-                      )}
-                    </td>
-                  </tr>
+                  <MemberRow
+                    key={m.id}
+                    m={m}
+                    isLast={i === members.length - 1}
+                    onRemove={handleRemove}
+                  />
                 ))}
               </tbody>
             </table>
           )}
         </div>
       </Card>
-
-      {members.length > 0 && (
-        <Card style={{ marginBottom: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <div>
-              <p style={{ fontSize: 12, fontWeight: 500, color: colors.gray700 }}>backend/.env snippet</p>
-              <p style={{ fontSize: 12, color: colors.gray400, marginTop: 2 }}>Paste this into backend/.env to persist across restarts</p>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" size="sm" onClick={() => setShowSnippet(!showSnippet)}>{showSnippet ? 'Hide' : 'Show'}</Button>
-              <Button variant="secondary" size="sm" onClick={copySnippet}>{snippetCopied ? '✓ Copied' : 'Copy'}</Button>
-            </div>
-          </div>
-          {showSnippet && (
-            <pre style={{
-              fontFamily: fonts.mono, fontSize: 11, color: colors.gray700,
-              background: colors.gray50, border: `1px solid ${colors.gray200}`,
-              borderRadius: 6, padding: '10px 14px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.7,
-            }}>
-              {toEnvLine(members)}
-            </pre>
-          )}
-        </Card>
-      )}
     </div>
   );
 }

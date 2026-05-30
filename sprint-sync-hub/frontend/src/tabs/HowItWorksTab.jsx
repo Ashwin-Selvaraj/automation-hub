@@ -55,7 +55,7 @@ export default function HowItWorksTab() {
       </div>
 
       <Section title="1. Architecture" color={COLORS.primary}>
-        <P>Sprint-Sync Hub has three layers: a React frontend (this dashboard), a Node.js/Express backend (runs cron jobs and holds all credentials), and three external APIs (Slack, Jira, Claude AI).</P>
+        <P>Automation-Hub has three layers: a React frontend (this dashboard), a Node.js/Express backend (runs cron jobs and holds all credentials), and three external APIs (Slack, Jira, Claude AI).</P>
         <Code>{`Browser (React)
     │  REST API calls (no secrets)
     ▼

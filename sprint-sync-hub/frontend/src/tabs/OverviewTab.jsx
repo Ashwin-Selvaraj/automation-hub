@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { theme, styles } from '../theme.js';
 import { getSlackMessages, getJiraIssues, getSyncLog } from '../api.js';
+import { API_BASE } from '../config.js';
 import Card, { SectionHeader } from '../components/Card.jsx';
 import Badge from '../components/Badge.jsx';
 import Toggle from '../components/Toggle.jsx';
@@ -9,28 +10,176 @@ import Spinner from '../components/Spinner.jsx';
 const { colors, fonts } = theme;
 
 const AUTOMATIONS = [
-  { name: 'Huddle Sync',          desc: 'Matches Slack standup messages to Jira tasks every 30 min, Mon–Fri 8am–8pm.' },
-  { name: 'Deadline Check',       desc: 'DMs assignees of tasks due today. Runs at 9:00 am daily.' },
-  { name: 'End-of-Day Check',     desc: 'DMs members with no standup update. Runs Mon–Fri at the configured EOD time.' },
-  { name: 'Weekly Report',        desc: 'Posts AI sprint summary to the Slack channel. Runs on the configured report day.' },
+  { name: 'Huddle Sync',      desc: 'Matches Slack standup messages to Jira tasks every 30 min, Mon–Fri 8am–8pm.' },
+  { name: 'Deadline Check',   desc: 'DMs assignees of tasks due today. Runs at 9:00 am daily.' },
+  { name: 'End-of-Day Check', desc: 'DMs members with no standup update. Runs Mon–Fri at the configured EOD time.' },
+  { name: 'Weekly Report',    desc: 'Posts AI sprint summary to the Slack channel. Runs on the configured report day.' },
 ];
 
-function MetricCard({ label, value, loading, tint }) {
+// ─── Member list popup ────────────────────────────────────────────────────────
+
+function MemberListPopup({ title, members, emptyText, accentColor, onClose }) {
+  // Close on Escape
+  useEffect(() => {
+    const fn = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', fn);
+    return () => document.removeEventListener('keydown', fn);
+  }, [onClose]);
+
+  function initials(name) {
+    if (!name) return '?';
+    return name.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+  }
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)',
+          zIndex: 300, backdropFilter: 'blur(1px)',
+        }}
+      />
+      {/* Panel */}
+      <div style={{
+        position: 'fixed', top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        background: colors.white, borderRadius: 12,
+        boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
+        zIndex: 301, width: 340, maxHeight: '70vh',
+        display: 'flex', flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 20px', borderBottom: `1px solid ${colors.gray100}`,
+          background: colors.gray50,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 10, height: 10, borderRadius: '50%',
+              background: accentColor, flexShrink: 0,
+            }} />
+            <span style={{ fontSize: 14, fontWeight: 700, color: colors.gray900, fontFamily: fonts.body }}>
+              {title}
+            </span>
+            <span style={{
+              fontSize: 11, fontWeight: 700, background: accentColor + '22',
+              color: accentColor, padding: '1px 7px', borderRadius: 99,
+              fontFamily: fonts.body,
+            }}>
+              {members.length}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: colors.gray100, border: 'none', borderRadius: '50%',
+              width: 26, height: 26, cursor: 'pointer', fontSize: 15,
+              color: colors.gray500, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', lineHeight: 1,
+            }}
+          >×</button>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: 'auto', padding: '8px 0' }}>
+          {members.length === 0 ? (
+            <div style={{
+              padding: '28px 20px', textAlign: 'center',
+              fontSize: 13, color: colors.gray400, fontFamily: fonts.body,
+            }}>
+              {emptyText}
+            </div>
+          ) : (
+            members.map((m, i) => (
+              <div
+                key={m.id || m.userId || i}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '10px 20px',
+                  borderBottom: i < members.length - 1 ? `1px solid ${colors.gray100}` : 'none',
+                }}
+              >
+                {/* Avatar */}
+                <div style={{
+                  width: 36, height: 36, borderRadius: '50%',
+                  background: colors.blue50, color: colors.blue600,
+                  fontSize: 13, fontWeight: 700, fontFamily: fonts.body,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0, border: `2px solid ${colors.gray200}`,
+                }}>
+                  {initials(m.name)}
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: colors.gray900, fontFamily: fonts.body }}>
+                    {m.name}
+                  </div>
+                  {m.role && (
+                    <div style={{ fontSize: 11, color: colors.gray400, fontFamily: fonts.body, marginTop: 1 }}>
+                      {m.role}
+                    </div>
+                  )}
+                </div>
+                {/* Time posted (if available) */}
+                {m.time && (
+                  <div style={{ marginLeft: 'auto', fontSize: 11, color: colors.gray400, fontFamily: fonts.body, whiteSpace: 'nowrap' }}>
+                    {m.time}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Metric card — optionally clickable ──────────────────────────────────────
+
+function MetricCard({ label, value, loading, tint, onClick }) {
+  const [hovered, setHovered] = useState(false);
   const bg     = tint ? tint.bg     : colors.white;
   const border = tint ? tint.border : colors.gray200;
   const valCol = tint ? tint.text   : colors.gray900;
+
   return (
-    <div style={{
-      background: bg, border: `1px solid ${border}`, borderRadius: 8,
-      padding: '20px 20px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-    }}>
+    <div
+      onClick={onClick}
+      onMouseEnter={() => onClick && setHovered(true)}
+      onMouseLeave={() => onClick && setHovered(false)}
+      style={{
+        background: bg,
+        border: `1px solid ${hovered ? valCol : border}`,
+        borderRadius: 8,
+        padding: '20px 20px 16px',
+        boxShadow: hovered ? `0 4px 12px ${border}88` : '0 1px 3px rgba(0,0,0,0.06)',
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'all 0.15s ease',
+        position: 'relative',
+      }}
+    >
       <div style={{ fontSize: 28, fontWeight: 700, color: valCol, fontFamily: fonts.body, lineHeight: 1.2 }}>
         {loading ? <Spinner size={24} /> : value ?? '—'}
       </div>
-      <div style={{ fontSize: 12, color: valCol, opacity: 0.65, marginTop: 6, fontFamily: fonts.body }}>{label}</div>
+      <div style={{
+        fontSize: 12, color: valCol, opacity: 0.65,
+        marginTop: 6, fontFamily: fonts.body,
+        display: 'flex', alignItems: 'center', gap: 4,
+      }}>
+        {label}
+        {onClick && !loading && (
+          <span style={{ opacity: 0.5, fontSize: 11 }}>↗</span>
+        )}
+      </div>
     </div>
   );
 }
+
+// ─── Activity table ───────────────────────────────────────────────────────────
 
 function ActivityTable({ entries }) {
   if (!entries.length) {
@@ -79,38 +228,79 @@ function ActivityTable({ entries }) {
   );
 }
 
+// ─── Main tab ─────────────────────────────────────────────────────────────────
+
 export default function OverviewTab({ config }) {
-  const [messages,  setMessages]  = useState([]);
-  const [taskCount, setTaskCount] = useState(null);
-  const [log,       setLog]       = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [enabled,   setEnabled]   = useState([true, true, true, true]);
+  const [messages,   setMessages]   = useState([]);
+  const [taskCount,  setTaskCount]  = useState(null);
+  const [log,        setLog]        = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [enabled,    setEnabled]    = useState([true, true, true, true]);
+  const [perfDash,   setPerfDash]   = useState(null);
+  const [popup,      setPopup]      = useState(null); // 'posted' | 'missing' | null
 
   useEffect(() => {
     Promise.all([
       getSlackMessages(30).catch(() => ({ messages: [] })),
       getJiraIssues().catch(() => ({ issues: [] })),
       getSyncLog(50).catch(() => ({ entries: [] })),
-    ]).then(([msgData, issData, logData]) => {
+      fetch(`${API_BASE}/api/performance/dashboard`).then((r) => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([msgData, issData, logData, perf]) => {
       setMessages(msgData.messages || []);
       setTaskCount((issData.issues || []).length);
       setLog(logData.entries || []);
+      setPerfDash(perf);
     }).finally(() => setLoading(false));
   }, []);
 
-  const today       = new Date().toDateString();
-  const todayMsgs   = messages.filter((m) => m.date && new Date(m.date).toDateString() === today);
-  const postedNames = new Set(todayMsgs.map((m) => m.userId).filter(Boolean));
-  const postedToday = postedNames.size;
-  const totalM      = config?.teamMembers?.length || 0;
-  const missingToday = Math.max(0, totalM - postedToday);
+  // ── Who posted today ───────────────────────────────────────────────────────
+  const today      = new Date().toDateString();
+  const todayMsgs  = messages.filter((m) => m.date && new Date(m.date).toDateString() === today);
+  const teamMembers = config?.teamMembers || [];
 
-  const metrics = [
-    { label: 'Messages This Sprint', value: messages.length, tint: colors.tintBlue  },
-    { label: 'Tasks in Jira',        value: taskCount,       tint: colors.tintGreen  },
-    { label: 'Posted Today',         value: postedToday,     tint: colors.tintAmber  },
-    { label: 'Missing Today',        value: missingToday,    tint: colors.tintRed    },
+  // Build a map: userId → latest post time today
+  const postedMap = {};
+  for (const msg of todayMsgs) {
+    if (!msg.userId) continue;
+    if (!postedMap[msg.userId] || msg.date > postedMap[msg.userId]) {
+      postedMap[msg.userId] = msg.date;
+    }
+  }
+
+  const postedMembers = teamMembers
+    .filter((m) => postedMap[m.id])
+    .map((m) => ({
+      ...m,
+      time: new Date(postedMap[m.id]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }));
+
+  const missingMembers = teamMembers.filter((m) => !postedMap[m.id]);
+
+  // Fall back to raw userId count when no team config
+  const postedCount  = teamMembers.length > 0 ? postedMembers.length  : new Set(todayMsgs.map((m) => m.userId).filter(Boolean)).size;
+  const missingCount = teamMembers.length > 0 ? missingMembers.length : Math.max(0, (config?.teamMembers?.length || 0) - postedCount);
+
+  // ── Metrics ────────────────────────────────────────────────────────────────
+  const ts = perfDash?.teamStats;
+  const metrics = ts ? [
+    { id: 'score',    label: 'Avg Performance Score', value: ts.avgScore + '',        tint: colors.tintBlue   },
+    { id: 'complete', label: 'Completion Rate',        value: ts.avgCompletion + '%',  tint: colors.tintGreen  },
+    { id: 'deadline', label: 'Deadline Rate',          value: ts.avgDeadlineRate + '%',tint: colors.tintAmber  },
+    { id: 'standup',  label: 'Standup Rate',           value: ts.avgStandupRate + '%', tint: colors.tintPurple },
+  ] : [
+    { id: 'messages', label: 'Messages This Sprint',   value: messages.length,         tint: colors.tintBlue   },
+    { id: 'tasks',    label: 'Tasks in Jira',          value: taskCount,               tint: colors.tintGreen  },
+    { id: 'posted',   label: 'Posted Today',           value: postedCount,             tint: colors.tintAmber,  clickable: true },
+    { id: 'missing',  label: 'Missing Today',          value: missingCount,            tint: colors.tintRed,    clickable: true },
   ];
+
+  const atRisk = perfDash?.atRisk || [];
+
+  // ── Popup data ─────────────────────────────────────────────────────────────
+  function openPopup(id) {
+    if (id === 'posted')  setPopup('posted');
+    if (id === 'missing') setPopup('missing');
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -121,8 +311,38 @@ export default function OverviewTab({ config }) {
 
       {/* Metrics */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-        {metrics.map((m) => <MetricCard key={m.label} label={m.label} value={m.value} loading={loading} tint={m.tint} />)}
+        {metrics.map((m) => (
+          <MetricCard
+            key={m.id}
+            label={m.label}
+            value={m.value}
+            loading={loading}
+            tint={m.tint}
+            onClick={m.clickable && !loading ? () => openPopup(m.id) : undefined}
+          />
+        ))}
       </div>
+
+      {/* At-risk row */}
+      {atRisk.length > 0 && (
+        <Card style={{ marginBottom: 0, padding: '12px 16px' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: colors.red600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+            At Risk
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {atRisk.map((m) => (
+              <div key={m.member_id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  background: colors.red600, flexShrink: 0,
+                }} />
+                <span style={{ fontWeight: 600, color: colors.gray900, fontFamily: fonts.body }}>{m.name}</span>
+                <span style={{ color: colors.red600, fontFamily: fonts.body }}>{m.riskReason}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Activity log */}
       <Card style={{ marginBottom: 0 }}>
@@ -148,6 +368,26 @@ export default function OverviewTab({ config }) {
           ))}
         </div>
       </Card>
+
+      {/* Member list popups */}
+      {popup === 'posted' && (
+        <MemberListPopup
+          title="Posted Today"
+          members={postedMembers.length > 0 ? postedMembers : Array.from(new Set(todayMsgs.map(m => m.userId).filter(Boolean))).map(id => ({ id, name: id }))}
+          emptyText="Nobody has posted a standup today yet."
+          accentColor={colors.amber600}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'missing' && (
+        <MemberListPopup
+          title="Missing Today"
+          members={missingMembers}
+          emptyText="Everyone has posted today! 🎉"
+          accentColor={colors.red600}
+          onClose={() => setPopup(null)}
+        />
+      )}
     </div>
   );
 }
