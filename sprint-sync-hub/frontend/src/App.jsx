@@ -8,6 +8,7 @@ import SprintTab      from './tabs/SprintTab.jsx';
 import SyncTab         from './tabs/SyncTab.jsx';
 import PerformanceTab  from './tabs/PerformanceTab.jsx';
 import ReportTab       from './tabs/ReportTab.jsx';
+import HowItWorksTab  from './tabs/HowItWorksTab.jsx';
 
 const { colors, fonts } = theme;
 
@@ -19,6 +20,7 @@ const NAV = [
   { id: 'report',      label: 'Report'       },
   { id: 'connections', label: 'Connections'  },
   { id: 'team',        label: 'Team'         },
+  { id: 'help',        label: 'Help'         },
 ];
 
 function useWindowWidth() {
@@ -149,6 +151,7 @@ export default function App() {
             {active === 'sync'        && <SyncTab        {...tabProps} />}
             {active === 'performance' && <PerformanceTab {...tabProps} />}
             {active === 'report'      && <ReportTab      {...tabProps} />}
+            {active === 'help'        && <HowItWorksTab  {...tabProps} />}
           </div>
         </main>
       </div>
