@@ -29,6 +29,7 @@ app.use('/api/sync',        require('./routes/sync'));
 app.use('/api/report',      require('./routes/report'));
 app.use('/api/performance', require('./routes/performance'));
 app.use('/api/attendance',  require('./routes/attendance'));
+app.use('/api/checkout',    require('./routes/checkout'));
 
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();

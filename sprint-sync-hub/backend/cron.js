@@ -14,6 +14,7 @@ const memberRepo       = require('./repositories/memberRepository');
 const { getSprintWindow, toUnixTimestamp } = require('./utils/dateUtils');
 const configService = require('./services/configService');
 const zohoService   = require('./services/zohoService');
+const standupRepo   = require('./repositories/standupRepository');
 
 let lastSyncTs = null;
 
@@ -460,7 +461,121 @@ function startCronJobs() {
     }
   }, { timezone: tz });
 
-  console.log(`[${new Date().toISOString()}] All 4 cron jobs started (tz: ${tz})`);
+  // ── Job 5: Checkout Detection ─────────────────────────────────────────────────
+  // Polls Zoho every 15 minutes from 4:30 PM to 7:30 PM, Mon–Fri.
+  // For each member who has just checked out, checks if they posted a standup today.
+  // If not, triggers a DM and records the missed standup.
+  //
+  // In-memory Set of member DB IDs already processed today.
+  // Reset at midnight so the Set doesn't grow forever across days.
+  const processedToday = new Set();
+
+  cron.schedule('0 0 * * *', () => {
+    processedToday.clear();
+    console.log(`[${new Date().toISOString()}] Cron: processedToday Set cleared for new day`);
+  }, { timezone: tz });
+
+  // '15,30,45,0 16,17,18,19 * * 1-5'
+  // Fires at :00, :15, :30, :45 of hours 16–19 on weekdays
+  cron.schedule('*/15 16,17,18,19 * * 1-5', async () => {
+    console.log(`[${new Date().toISOString()}] Cron: running checkout detection`);
+    const orgId = getOrgId();
+
+    try {
+      // Guard — need an active sprint to record stats against
+      const sprintId = await getActiveSprintId();
+      if (!sprintId) {
+        console.warn('[cron] Checkout detection: no active sprint, skipping run');
+        return;
+      }
+
+      // Fetch today's attendance for all team members from Zoho
+      let attendanceRecords;
+      try {
+        attendanceRecords = await zohoService.getAllTodayAttendance();
+      } catch (zohoErr) {
+        console.error(`[cron] Checkout detection: Zoho unavailable — ${zohoErr.message}`);
+        activityLog.addEntry({ type: 'checkout_check', action: `Zoho unavailable: ${zohoErr.message}`, success: false });
+        return;
+      }
+
+      const today = toDateStr(new Date());
+      let checkedOutCount = 0;
+      let missingStandupCount = 0;
+      let dmsSentCount = 0;
+
+      for (const att of attendanceRecords) {
+        try {
+          // Skip members who haven't checked out yet
+          if (!att.checkedOut) continue;
+          checkedOutCount++;
+
+          // Find the DB member record (try Slack ID first, then email)
+          let dbMember = null;
+          if (att.slackUserId) {
+            dbMember = await memberRepo.findBySlackId(orgId, att.slackUserId).catch(() => null);
+          }
+          if (!dbMember && att.email) {
+            dbMember = await memberRepo.findByEmail(orgId, att.email).catch(() => null);
+          }
+          if (!dbMember) {
+            console.warn(`[cron] Checkout detection: no DB record for ${att.name} (${att.email}) — skipping`);
+            continue;
+          }
+
+          // Skip if already processed today (prevents duplicate DMs on subsequent polls)
+          if (processedToday.has(dbMember.id)) continue;
+
+          // Check standup status
+          const standupPost = await standupRepo.findByMemberAndDate(dbMember.id, today);
+          if (standupPost) {
+            // Posted standup — mark as processed, log, move on
+            processedToday.add(dbMember.id);
+            console.log(`[cron] Checkout detection: ${att.name} checked out at ${att.checkOutTime} ✓ (standup posted)`);
+            activityLog.addEntry({
+              type: 'checkout_with_standup', userId: att.slackUserId, userName: att.name,
+              action: `Checked out at ${att.checkOutTime} — standup already posted ✓`, success: true,
+            });
+            continue;
+          }
+
+          // No standup — trigger DM + record
+          missingStandupCount++;
+          const result = await performanceService.recordCheckoutWithoutStandup(orgId, sprintId, dbMember.id, att.checkOutTime || '—');
+          processedToday.add(dbMember.id);
+
+          if (result.dmSent) {
+            dmsSentCount++;
+            console.log(`[cron] Checkout without standup: ${att.name} at ${att.checkOutTime} — DM sent`);
+          } else if (result.alreadyRecorded) {
+            console.log(`[cron] Checkout without standup: ${att.name} — already notified today, skipped`);
+          } else {
+            console.log(`[cron] Checkout without standup: ${att.name} — ${result.reason}`);
+          }
+
+        } catch (memberErr) {
+          // Per-member errors must not stop the rest of the loop
+          console.error(`[cron] Checkout detection: error for ${att.name}:`, memberErr.message);
+          activityLog.addEntry({
+            type: 'checkout_check', userName: att.name,
+            action: `Processing error: ${memberErr.message}`, success: false,
+          });
+        }
+      }
+
+      console.log(
+        `[${new Date().toISOString()}] Checkout check complete: ` +
+        `${checkedOutCount} checked out, ${missingStandupCount} missing standup, ${dmsSentCount} DMs sent`
+      );
+
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Cron checkout detection crashed:`, err.message);
+      activityLog.addEntry({ type: 'checkout_check', action: `Checkout detection crashed: ${err.message}`, success: false });
+    }
+  }, { timezone: tz });
+
+  console.log(`[cron] Job 5 (checkout detection) scheduled */15 16,17,18,19 Mon-Fri (tz: ${tz})`);
+  console.log(`[${new Date().toISOString()}] All 5 cron jobs started (tz: ${tz})`);
 }
 
 module.exports = { startCronJobs, runHuddleSync };

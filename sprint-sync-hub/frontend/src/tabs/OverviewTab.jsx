@@ -331,8 +331,16 @@ export default function OverviewTab({ config, navigate }) {
   const [loading,     setLoading]     = useState(true);
   const [enabled,     setEnabled]     = useState([true, true, true, true]);
   const [perfDash,    setPerfDash]    = useState(null);
-  const [popup,       setPopup]       = useState(null); // 'posted' | 'missing' | 'tasks' | 'present' | 'leave' | 'late' | null
-  const [attendance,  setAttendance]  = useState(null); // Zoho data
+  const [popup,        setPopup]        = useState(null); // 'posted' | 'missing' | 'tasks' | 'present' | 'leave' | 'late' | null
+  const [attendance,   setAttendance]   = useState(null); // Zoho data
+  const [checkoutData, setCheckoutData] = useState(null); // checkout status
+
+  const loadCheckoutStatus = () => {
+    fetch(`${API_BASE}/api/checkout/status/today`)
+      .then((r) => r.ok ? r.json() : null)
+      .catch(() => null)
+      .then(setCheckoutData);
+  };
 
   useEffect(() => {
     Promise.all([
@@ -341,13 +349,19 @@ export default function OverviewTab({ config, navigate }) {
       getSyncLog(50).catch(() => ({ entries: [] })),
       fetch(`${API_BASE}/api/performance/dashboard`).then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch(`${API_BASE}/api/attendance/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([msgData, issData, logData, perf, att]) => {
+      fetch(`${API_BASE}/api/checkout/status/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([msgData, issData, logData, perf, att, checkout]) => {
       setMessages(msgData.messages || []);
       setIssues(issData.issues || []);
       setLog(logData.entries || []);
       setPerfDash(perf);
       setAttendance(att);
+      setCheckoutData(checkout);
     }).finally(() => setLoading(false));
+
+    // Auto-refresh checkout status every 5 minutes
+    const interval = setInterval(loadCheckoutStatus, 5 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   // ── Who posted today ───────────────────────────────────────────────────────
@@ -459,6 +473,89 @@ export default function OverviewTab({ config, navigate }) {
                 <span style={{ color: colors.red600, fontFamily: fonts.body }}>{m.riskReason}</span>
               </div>
             ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Today's Checkout Status */}
+      {checkoutData && checkoutData.members && checkoutData.members.length > 0 && (
+        <Card style={{ marginBottom: 0 }}>
+          <SectionHeader>Today's Checkout Status</SectionHeader>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {['Member', 'Checked Out', 'Standup Posted', 'Status'].map((h) => (
+                    <th key={h} style={{
+                      fontSize: 11, fontWeight: 600, color: colors.gray600,
+                      textTransform: 'uppercase', letterSpacing: '0.05em',
+                      padding: '8px 12px', borderBottom: `1px solid ${colors.gray200}`,
+                      textAlign: 'left', background: colors.white, whiteSpace: 'nowrap',
+                    }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {checkoutData.members.map((row) => {
+                  const rowBg =
+                    row.status === 'checked_out_no_standup' ? '#FFFBEB' :
+                    row.status === 'absent' ? colors.gray50 : colors.white;
+
+                  const statusBadge = {
+                    complete:               { label: 'All done',  bg: '#D1FAE5', color: '#065F46' },
+                    checked_out_no_standup: { label: 'DM sent',   bg: '#FEF3C7', color: '#92400E' },
+                    still_in:               { label: 'Working',   bg: '#DBEAFE', color: '#1E40AF' },
+                    absent:                 { label: 'Absent',    bg: colors.gray100, color: colors.gray500 },
+                  }[row.status] || { label: row.status, bg: colors.gray100, color: colors.gray500 };
+
+                  return (
+                    <tr key={row.memberId} style={{ borderBottom: `1px solid ${colors.gray100}`, background: rowBg }}>
+                      <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 500, color: colors.gray900, fontFamily: fonts.body }}>
+                        {row.name}
+                      </td>
+                      <td style={{ padding: '10px 12px', fontSize: 13, color: colors.gray500, fontFamily: fonts.body, whiteSpace: 'nowrap' }}>
+                        {row.status === 'absent'   ? <span style={{ color: colors.gray400 }}>—</span> :
+                         row.status === 'still_in' ? <span style={{ color: colors.gray400 }}>Still in</span> :
+                         row.checkOutTime || '—'}
+                      </td>
+                      <td style={{ padding: '10px 12px', fontSize: 13, fontFamily: fonts.body, whiteSpace: 'nowrap' }}>
+                        {row.status === 'absent' ? (
+                          <span style={{ color: colors.gray400 }}>—</span>
+                        ) : row.postedStandup ? (
+                          <span style={{ color: '#059669', fontWeight: 600 }}>
+                            ✓ Posted{row.standupPostTime ? ` · ${row.standupPostTime}` : ''}
+                          </span>
+                        ) : (
+                          <span style={{ color: row.status === 'checked_out_no_standup' ? '#D97706' : colors.gray400 }}>
+                            Not yet
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <span style={{
+                          fontSize: 11, fontWeight: 700, padding: '3px 10px',
+                          borderRadius: 99, background: statusBadge.bg, color: statusBadge.color,
+                          fontFamily: fonts.body,
+                        }}>
+                          {statusBadge.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* Summary line */}
+          <div style={{
+            marginTop: 12, paddingTop: 10, borderTop: `1px solid ${colors.gray100}`,
+            fontSize: 12, color: colors.gray400, fontFamily: fonts.body,
+          }}>
+            {checkoutData.summary.checkedOut} member{checkoutData.summary.checkedOut !== 1 ? 's' : ''} checked out
+            {' · '}
+            {checkoutData.summary.postedStandup} posted standup
+            {' · '}
+            {checkoutData.summary.checkoutWithoutStandup} DM{checkoutData.summary.checkoutWithoutStandup !== 1 ? 's' : ''} sent today
           </div>
         </Card>
       )}

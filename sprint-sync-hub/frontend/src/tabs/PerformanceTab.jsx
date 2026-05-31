@@ -535,14 +535,22 @@ function ExpandedRow({ memberId }) {
 // ─── Member profile drawer ────────────────────────────────────────────────────
 
 function MemberDrawer({ memberId, onClose }) {
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
+  const [profile,         setProfile]         = useState(null);
+  const [loading,         setLoading]         = useState(true);
+  const [error,           setError]           = useState(null);
+  const [checkoutHistory, setCheckoutHistory] = useState(null);
+
   useEffect(() => {
     if (!memberId) return;
     setLoading(true); setError(null);
-    apiFetch(`/api/performance/member/${memberId}`)
-      .then(setProfile).catch((e) => setError(e.message)).finally(() => setLoading(false));
+    Promise.all([
+      apiFetch(`/api/performance/member/${memberId}`),
+      fetch(`${API_BASE}/api/checkout/history?memberId=${memberId}&days=30`)
+        .then((r) => r.ok ? r.json() : null).catch(() => null),
+    ])
+      .then(([prof, hist]) => { setProfile(prof); setCheckoutHistory(hist); })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }, [memberId]);
 
   useEffect(() => {
@@ -731,6 +739,70 @@ function MemberDrawer({ memberId, onClose }) {
                   )}
                   {s.days_on_leave > 0 && (
                     <span style={{ color: colors.gray400 }}>({s.days_on_leave} day{s.days_on_leave !== 1 ? 's' : ''} leave excluded from standup score)</span>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Checkout vs Standup — Last 30 Days */}
+            {checkoutHistory && checkoutHistory.history && checkoutHistory.history.length > 0 && (
+              <>
+                <Divider />
+                <SectionLabel>Checkout vs Standup — Last 30 Days</SectionLabel>
+                {/* Calendar grid: 6 cols × 5 rows = 30 days */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(6, 28px)',
+                  gap: 4,
+                  marginBottom: 12,
+                }}>
+                  {checkoutHistory.history.map((day) => {
+                    let bg, symbol, title;
+                    if (day.isWeekend) {
+                      bg = 'transparent'; symbol = ''; title = day.date + ' (weekend)';
+                    } else if (day.onLeave) {
+                      bg = '#E0E7FF'; symbol = 'L'; title = day.date + ' — On leave';
+                    } else if (day.absent) {
+                      bg = '#F3F4F6'; symbol = '–'; title = day.date + ' — Absent';
+                    } else if (day.checkedOut && day.postedStandup) {
+                      bg = '#DCF7E8'; symbol = '✓'; title = day.date + ` — Checked out ${day.checkOutTime || ''}, standup posted`;
+                    } else if (day.checkedOut && !day.postedStandup) {
+                      bg = '#FEF3C7'; symbol = '!'; title = day.date + ` — Checked out ${day.checkOutTime || ''}, no standup`;
+                    } else {
+                      bg = '#DBEAFE'; symbol = '→'; title = day.date + ' — Still in / ongoing';
+                    }
+                    return (
+                      <div
+                        key={day.date}
+                        title={title}
+                        style={{
+                          width: 28, height: 28, borderRadius: 4,
+                          background: bg,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: day.isWeekend ? 0 : 11, fontWeight: 700,
+                          color: day.onLeave ? '#4338CA' :
+                                 day.absent  ? colors.gray400 :
+                                 day.checkedOut && day.postedStandup ? '#065F46' :
+                                 day.checkedOut ? '#92400E' : '#1E40AF',
+                          cursor: 'default',
+                          border: day.isWeekend ? 'none' : `1px solid ${bg === 'transparent' ? 'transparent' : bg + 'cc'}`,
+                        }}
+                      >
+                        {symbol}
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Legend summary */}
+                <div style={{
+                  display: 'flex', gap: 18, flexWrap: 'wrap',
+                  fontSize: 11, color: colors.gray500, fontFamily: fonts.body, marginBottom: 18,
+                }}>
+                  <span><strong style={{ color: '#065F46' }}>{checkoutHistory.summary.checkoutWithStandup}</strong> checkout + standup</span>
+                  <span><strong style={{ color: '#92400E' }}>{checkoutHistory.summary.checkoutWithoutStandup}</strong> checkout without standup</span>
+                  <span><strong style={{ color: colors.gray400 }}>{checkoutHistory.summary.absent}</strong> absent</span>
+                  {checkoutHistory.summary.onLeave > 0 && (
+                    <span><strong style={{ color: '#4338CA' }}>{checkoutHistory.summary.onLeave}</strong> on leave</span>
                   )}
                 </div>
               </>

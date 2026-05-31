@@ -11,6 +11,7 @@ const scoringService   = require('./scoringService');
 const slackService     = require('./slackService');
 const jiraService      = require('./jiraService');
 const claudeService    = require('./claudeService');
+const activityLog      = require('./activityLog');
 const { getSprintConfig } = require('../utils/sprintConfig');
 
 function toDateStr(d) {
@@ -458,6 +459,90 @@ function buildRiskReason(m) {
   return reasons.join(', ') || 'low performance score';
 }
 
+/**
+ * Called when a member checks out of Zoho without having posted a standup.
+ * Records the missed standup in the database, sends a DM, and logs the event.
+ * Idempotent — calling twice for the same member on the same day has no additional effect.
+ *
+ * @param {number} organisationId
+ * @param {number} sprintId
+ * @param {number} memberId          - DB member id (not Slack id)
+ * @param {string} checkoutTime      - "HH:MM" format
+ * @returns {Promise<{ dmSent: boolean, alreadyRecorded: boolean, reason: string }>}
+ */
+async function recordCheckoutWithoutStandup(organisationId, sprintId, memberId, checkoutTime) {
+  try {
+    // STEP 1 — Idempotency check (20-hour window)
+    const alreadyNotified = await notifRepo.wasNotifiedRecently(memberId, 'missing_standup', null, 20);
+    if (alreadyNotified) {
+      return { dmSent: false, alreadyRecorded: true, reason: 'Already notified today' };
+    }
+
+    // STEP 2 — Double-check standup status (race condition protection)
+    const today = toDateStr(new Date());
+    const existingPost = await standupRepo.findByMemberAndDate(memberId, today);
+    if (existingPost) {
+      return { dmSent: false, alreadyRecorded: false, reason: 'Standup was posted' };
+    }
+
+    // STEP 3 — Update daily stats
+    await statsRepo.upsertDailyStats(organisationId, sprintId, memberId, today, {
+      posted_standup: false,
+      checked_in:     true,
+      check_out_time: checkoutTime,
+    });
+
+    // STEP 4 — Draft the DM
+    const member     = await memberRepo.findById(memberId);
+    const sprint     = await sprintRepo.findById(sprintId);
+    const memberName = member?.name || 'there';
+    const sprintName = sprint?.name || 'current sprint';
+    const channelName = (process.env.SLACK_CHANNEL_NAME || process.env.SLACK_CHANNEL_ID || 'tech-huddle').replace(/^#/, '');
+
+    const dmText = await claudeService.draftCheckoutNudgeDM(memberName, channelName, checkoutTime, sprintName);
+
+    // STEP 5 — Send the DM
+    let dmSent = false;
+    const slackUserId = member?.slack_user_id;
+    if (slackUserId) {
+      try {
+        await slackService.sendDM(slackUserId, dmText);
+        dmSent = true;
+      } catch (dmErr) {
+        console.error('[performanceService.recordCheckoutWithoutStandup] DM failed:', dmErr.message);
+        activityLog.addEntry({
+          type: 'checkout_no_standup', userId: slackUserId, userName: memberName,
+          action: `Checkout DM failed — ${dmErr.message}`, success: false,
+        });
+        // Still continue — we want the DB record even if DM failed
+      }
+    }
+
+    // STEP 6 — Record the notification
+    await notifRepo.recordNotification(organisationId, memberId, 'missing_standup', 'dm', null);
+
+    // STEP 7 — Activity log
+    activityLog.addEntry({
+      type: 'checkout_no_standup',
+      userId:   slackUserId || String(memberId),
+      userName: memberName,
+      action:   `Checked out at ${checkoutTime} without posting standup${dmSent ? ' — DM sent' : ' — DM failed'}`,
+      success:  dmSent,
+    });
+
+    // STEP 8 — Return result
+    return { dmSent, alreadyRecorded: false, reason: dmSent ? 'DM sent successfully' : 'Stats recorded, DM failed' };
+
+  } catch (err) {
+    console.error('[performanceService.recordCheckoutWithoutStandup]', err.message);
+    activityLog.addEntry({
+      type: 'checkout_no_standup', userName: String(memberId),
+      action: `recordCheckoutWithoutStandup failed: ${err.message}`, success: false,
+    });
+    return { dmSent: false, alreadyRecorded: false, reason: err.message };
+  }
+}
+
 module.exports = {
   syncMemberStandup,
   recordJiraSync,
@@ -467,4 +552,5 @@ module.exports = {
   getMemberProfile,
   getTeamLeaderboard,
   getAtRiskMembers,
+  recordCheckoutWithoutStandup,
 };

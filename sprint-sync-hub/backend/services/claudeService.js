@@ -323,6 +323,51 @@ Only use confirmed dates from the message. Do not invent dates. Respond with JSO
  * Tests the Anthropic API connection with a minimal request.
  * @returns {Promise<boolean>}
  */
+/**
+ * Draft a friendly Slack DM for a member who checked out without posting a standup.
+ * Warm and non-scolding — acknowledges they have left and gently asks for a quick update.
+ *
+ * @param {string} memberName   - Member's display name e.g. "Akhil"
+ * @param {string} channelName  - Standup channel name e.g. "tech-huddle"
+ * @param {string} checkoutTime - Time they checked out e.g. "18:32"
+ * @param {string} sprintName   - Current sprint name e.g. "Sprint 12"
+ * @returns {Promise<string>}   - The DM text ready to send
+ */
+async function draftCheckoutNudgeDM(memberName, channelName, checkoutTime, sprintName) {
+  try {
+    const client = getClient();
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 200,
+      system: `You are a friendly team assistant. Write a short Slack DM to a developer who just checked out of the office without posting their daily standup update.
+
+Rules:
+- Warm and friendly, never scolding or passive aggressive
+- Acknowledge they have already left for the day — do not ask them to come back
+- Ask them to post a quick update in the standup channel when they have a moment
+- Mention it helps the team and feeds into the sprint report
+- Maximum 3 sentences
+- No bullet points
+- End with a friendly sign-off from "Sprint-Sync Hub"
+- Do not use the word "forgot" — use "haven't had a chance to" instead`,
+      messages: [{
+        role: 'user',
+        content: `Member name: ${memberName}
+Checked out at: ${checkoutTime}
+Standup channel: #${channelName}
+Current sprint: ${sprintName}
+
+Write the DM now.`,
+      }],
+    });
+    return res.content[0]?.text?.trim() ||
+      `Hey ${memberName} 👋 Looks like you haven't had a chance to post your standup in #${channelName} today — no worries since you've already wrapped up! Whenever you get a moment, a quick update would help the team and keep the ${sprintName} report accurate. — Sprint-Sync Hub`;
+  } catch (err) {
+    console.error('[claudeService.draftCheckoutNudgeDM]', err.message);
+    return `Hey ${memberName} 👋 Looks like you haven't had a chance to post your standup in #${channelName} today — no worries since you've already wrapped up for the day! Whenever you get a moment, a quick update would really help the team stay in sync for ${sprintName}. — Sprint-Sync Hub`;
+  }
+}
+
 async function testConnection() {
   try {
     const client = getClient();
@@ -342,6 +387,7 @@ module.exports = {
   draftNoMatchDM,
   draftMissingUpdateDM,
   draftDeadlineDM,
+  draftCheckoutNudgeDM,
   generateWeeklyReport,
   parseMultiDateStandup,
   testConnection,

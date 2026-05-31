@@ -272,6 +272,118 @@ async function getTeamAttendance(members, date) {
 }
 
 /**
+ * Get today's attendance record for a single employee.
+ * Convenience wrapper over getAttendance() that always uses today's date
+ * and also surfaces a normalised `checkedOut` boolean field.
+ *
+ * @param {string} employeeEmail - Employee's email address
+ * @returns {Promise<{
+ *   checkedIn: boolean,
+ *   checkInTime: string|null,
+ *   checkedOut: boolean,
+ *   checkOutTime: string|null,
+ *   hoursWorked: number|null,
+ *   status: string
+ * }>}
+ */
+async function getTodayAttendance(employeeEmail) {
+  const defaultResult = {
+    checkedIn: false, checkInTime: null,
+    checkedOut: false, checkOutTime: null,
+    hoursWorked: null, status: 'No Record',
+  };
+  if (!isConfigured()) return defaultResult;
+  try {
+    const today = toDateStr(new Date());
+    const data  = await zohoGet(
+      `/people/api/attendance/getAttendance?empId=${encodeURIComponent(employeeEmail)}&startDate=${today}&endDate=${today}`
+    );
+
+    const record = data?.response?.result?.[0] || data?.result?.[0] || null;
+    if (!record) return defaultResult;
+
+    const checkIn  = record.checkIn  || record.Check_In  || null;
+    const checkOut = record.checkOut || record.Check_Out || null;
+    const hours    = record.hoursWorked || record.Hours_Worked || null;
+    const status   = record.status   || record.Status    || (checkIn ? 'Present' : 'Absent');
+
+    return {
+      checkedIn:    !!checkIn,
+      checkInTime:  checkIn  ? String(checkIn).substring(0, 5)  : null,
+      checkedOut:   !!checkOut,
+      checkOutTime: checkOut ? String(checkOut).substring(0, 5) : null,
+      hoursWorked:  hours    ? parseFloat(hours) : null,
+      status:       String(status),
+    };
+  } catch (err) {
+    console.warn('[zohoService.getTodayAttendance]', err.message);
+    return defaultResult;
+  }
+}
+
+/**
+ * Get today's attendance for ALL configured team members in parallel.
+ * Reads TEAM_MEMBERS from the process.env JSON array.
+ * Used by the checkout-detection cron job.
+ *
+ * @returns {Promise<Array<{
+ *   email: string,
+ *   slackUserId: string,
+ *   name: string,
+ *   checkedIn: boolean,
+ *   checkInTime: string|null,
+ *   checkedOut: boolean,
+ *   checkOutTime: string|null,
+ *   hoursWorked: number|null,
+ *   status: string
+ * }>>}
+ */
+async function getAllTodayAttendance() {
+  if (!isConfigured()) return [];
+
+  const raw = process.env.TEAM_MEMBERS || '';
+  if (!raw.trim()) {
+    console.warn('[zohoService.getAllTodayAttendance] TEAM_MEMBERS env var is not set');
+    return [];
+  }
+
+  let teamMembers = [];
+  try {
+    const parsed = JSON.parse(raw);
+    teamMembers = Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn('[zohoService.getAllTodayAttendance] Failed to parse TEAM_MEMBERS:', err.message);
+    return [];
+  }
+
+  // Only process members that have an email address for Zoho lookup
+  const membersWithEmail = teamMembers.filter((m) => m.email);
+  if (membersWithEmail.length === 0) {
+    console.warn('[zohoService.getAllTodayAttendance] No team members have an email address configured');
+    return [];
+  }
+
+  const results = await Promise.all(
+    membersWithEmail.map(async (m) => {
+      const att = await getTodayAttendance(m.email);
+      return {
+        email:        m.email,
+        slackUserId:  m.id,
+        name:         m.name,
+        checkedIn:    att.checkedIn,
+        checkInTime:  att.checkInTime,
+        checkedOut:   att.checkedOut,
+        checkOutTime: att.checkOutTime,
+        hoursWorked:  att.hoursWorked,
+        status:       att.status,
+      };
+    })
+  );
+
+  return results;
+}
+
+/**
  * Test that the Zoho integration works — used by /api/config/health.
  * Returns true or throws.
  */
@@ -290,5 +402,7 @@ module.exports = {
   getCheckInTime,
   isLateCheckIn,
   getTeamAttendance,
+  getTodayAttendance,
+  getAllTodayAttendance,
   testConnection,
 };

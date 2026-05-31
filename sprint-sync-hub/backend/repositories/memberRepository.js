@@ -73,4 +73,27 @@ async function deactivate(memberId) {
   }
 }
 
-module.exports = { findOrCreate, findBySlackId, findAll, updateJiraAccountId, deactivate };
+async function findById(memberId) {
+  try {
+    const { rows } = await db.query('SELECT * FROM members WHERE id = $1', [memberId]);
+    return rows[0] || null;
+  } catch (err) {
+    console.error('[memberRepository.findById]', err.message);
+    throw err;
+  }
+}
+
+async function findByEmail(organisationId, email) {
+  try {
+    const { rows } = await db.query(
+      'SELECT * FROM members WHERE organisation_id = $1 AND email = $2 LIMIT 1',
+      [organisationId, email]
+    );
+    return rows[0] || null;
+  } catch (err) {
+    console.error('[memberRepository.findByEmail]', err.message);
+    throw err;
+  }
+}
+
+module.exports = { findOrCreate, findById, findByEmail, findBySlackId, findAll, updateJiraAccountId, deactivate };
