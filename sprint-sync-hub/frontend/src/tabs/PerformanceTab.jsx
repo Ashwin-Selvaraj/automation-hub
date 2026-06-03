@@ -358,7 +358,7 @@ function LeaderboardTable({ rows, onMemberClick, expandedId, setExpandedId }) {
       {/* Head */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '44px 1fr 100px 80px 80px 80px 56px 60px',
+        gridTemplateColumns: '44px 1fr 100px 80px 80px 80px 70px 56px 60px',
         padding: '9px 16px',
         background: colors.gray50,
         borderBottom: `1px solid ${colors.gray200}`,
@@ -371,6 +371,7 @@ function LeaderboardTable({ rows, onMemberClick, expandedId, setExpandedId }) {
         <span>Standups</span>
         <span>Tasks</span>
         <span>Deadlines</span>
+        <span>Mismatches</span>
         <span>Streak</span>
         <span>Trend</span>
       </div>
@@ -414,7 +415,7 @@ function TableRow({ row, rank, expanded, onToggle, onNameClick }) {
       onMouseLeave={() => setHovered(false)}
       style={{
         display: 'grid',
-        gridTemplateColumns: '44px 1fr 100px 80px 80px 80px 56px 60px',
+        gridTemplateColumns: '44px 1fr 100px 80px 80px 80px 70px 56px 60px',
         padding: '11px 16px', alignItems: 'center',
         borderBottom: `1px solid ${colors.gray100}`,
         background: expanded ? colors.blue50 : hovered ? colors.gray50 : colors.white,
@@ -469,6 +470,13 @@ function TableRow({ row, rank, expanded, onToggle, onNameClick }) {
 
       {/* Deadlines */}
       {deadlineCell}
+
+      {/* Mismatches */}
+      {(() => {
+        const n = row.mismatch_count ?? 0;
+        const color = n === 0 ? colors.gray300 : n === 1 ? colors.amber600 : colors.red600;
+        return <span style={{ fontWeight: n > 0 ? 700 : 400, color }}>{n}</span>;
+      })()}
 
       {/* Streak */}
       <span style={{ color: colors.gray700 }}>
@@ -539,6 +547,7 @@ function MemberDrawer({ memberId, onClose }) {
   const [loading,         setLoading]         = useState(true);
   const [error,           setError]           = useState(null);
   const [checkoutHistory, setCheckoutHistory] = useState(null);
+  const [mismatchHistory, setMismatchHistory] = useState(null);
 
   useEffect(() => {
     if (!memberId) return;
@@ -547,8 +556,10 @@ function MemberDrawer({ memberId, onClose }) {
       apiFetch(`/api/performance/member/${memberId}`),
       fetch(`${API_BASE}/api/checkout/history?memberId=${memberId}&days=30`)
         .then((r) => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/api/mismatch/member/${memberId}`)
+        .then((r) => r.ok ? r.json() : null).catch(() => null),
     ])
-      .then(([prof, hist]) => { setProfile(prof); setCheckoutHistory(hist); })
+      .then(([prof, hist, mismatch]) => { setProfile(prof); setCheckoutHistory(hist); setMismatchHistory(mismatch); })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [memberId]);
@@ -808,6 +819,60 @@ function MemberDrawer({ memberId, onClose }) {
               </>
             )}
 
+            {/* ── Task Alignment ─────────────────────────────────────── */}
+            {mismatchHistory && (
+              <>
+                <Divider />
+                <SectionLabel>Task Alignment — {m?.currentSummary?.sprint_name || 'This Sprint'}</SectionLabel>
+                {(() => {
+                  const events    = mismatchHistory.events || [];
+                  const matched   = (m?.currentSummary?.standup_days_posted || 0) - events.filter((e) => !e.resolved).length;
+                  const mismatches = events.length;
+                  return (
+                    <>
+                      <div style={{ display: 'flex', gap: 20, marginBottom: 12 }}>
+                        <span style={{ fontSize: 13, fontFamily: fonts.body, color: colors.green600 }}>
+                          ✓ <strong>{Math.max(0, matched)}</strong> standup messages matched
+                        </span>
+                        {mismatches > 0 && (
+                          <span style={{ fontSize: 13, fontFamily: fonts.body, color: colors.amber600 }}>
+                            ⚠ <strong>{mismatches}</strong> mismatch{mismatches !== 1 ? 'es' : ''} detected
+                          </span>
+                        )}
+                      </div>
+                      {events.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 }}>
+                          {events.map((evt) => {
+                            const dateLabel = evt.created_at
+                              ? new Date(evt.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                              : '';
+                            const desc = evt.mismatch_details || evt.match_type || 'Mismatch detected';
+                            return (
+                              <div key={evt.id} style={{
+                                display: 'flex', alignItems: 'baseline', gap: 6,
+                                fontSize: 12, fontFamily: fonts.body,
+                                color: evt.resolved ? colors.gray300 : colors.amber600,
+                                textDecoration: evt.resolved ? 'line-through' : 'none',
+                              }}>
+                                <span>└</span>
+                                <span style={{ flex: 1 }}>{desc}</span>
+                                {dateLabel && <span style={{ color: colors.gray400, textDecoration: 'none', flexShrink: 0 }}>{dateLabel}</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {events.length === 0 && (
+                        <div style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body, marginBottom: 14 }}>
+                          No mismatches this sprint ✓
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </>
+            )}
+
             {/* Overall stats */}
             {m.overallStats && (
               <>
@@ -931,19 +996,23 @@ function ActivityFeed({ items, onMemberClick }) {
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
 export default function PerformanceTab() {
-  const [dashboard, setDashboard]   = useState(null);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState(null);
-  const [view, setView]             = useState('cards');   // 'cards' | 'table'
-  const [drawerMemberId, setDrawer] = useState(null);
-  const [tableExpanded, setTableExp] = useState(null);
-  const [computing, setComputing]   = useState(false);
-  const [computeMsg, setComputeMsg] = useState(null);
+  const [dashboard, setDashboard]       = useState(null);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState(null);
+  const [view, setView]                 = useState('cards');   // 'cards' | 'table'
+  const [drawerMemberId, setDrawer]     = useState(null);
+  const [tableExpanded, setTableExp]    = useState(null);
+  const [computing, setComputing]       = useState(false);
+  const [computeMsg, setComputeMsg]     = useState(null);
+  const [mismatchStats, setMismatchStats] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
-    apiFetch('/api/performance/dashboard')
-      .then(setDashboard)
+    Promise.all([
+      apiFetch('/api/performance/dashboard'),
+      fetch(`${API_BASE}/api/mismatch/stats`).then((r) => r.ok ? r.json() : null).catch(() => null),
+    ])
+      .then(([dash, mstats]) => { setDashboard(dash); setMismatchStats(mstats); })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -973,8 +1042,18 @@ export default function PerformanceTab() {
 
   const { teamStats, leaderboard = [], atRisk = [], recentActivity = [] } = dashboard || {};
 
-  // Enrich leaderboard rows with trend (stable for now unless we have history)
-  const enriched = leaderboard.map((row, i, arr) => ({ ...row, trend: row.trend || 'stable' }));
+  // Build per-member mismatch count from stats
+  const mismatchByMember = {};
+  if (mismatchStats?.byMember) {
+    for (const m of mismatchStats.byMember) mismatchByMember[m.memberId] = m.count;
+  }
+
+  // Enrich leaderboard rows with trend and mismatch count
+  const enriched = leaderboard.map((row, i, arr) => ({
+    ...row,
+    trend:         row.trend || 'stable',
+    mismatch_count: mismatchByMember[row.member_id] || 0,
+  }));
 
   return (
     <div style={{ padding: '24px 0', maxWidth: 960, fontFamily: fonts.body }}>

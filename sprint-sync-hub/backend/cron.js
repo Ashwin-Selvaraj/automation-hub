@@ -13,8 +13,10 @@ const sprintRepo       = require('./repositories/sprintRepository');
 const memberRepo       = require('./repositories/memberRepository');
 const { getSprintWindow, toUnixTimestamp } = require('./utils/dateUtils');
 const configService = require('./services/configService');
-const zohoService   = require('./services/zohoService');
-const standupRepo   = require('./repositories/standupRepository');
+const zohoService     = require('./services/zohoService');
+const standupRepo     = require('./repositories/standupRepository');
+const mismatchService = require('./services/mismatchService');
+const taskRepo        = require('./repositories/taskRepository');
 
 let lastSyncTs = null;
 
@@ -131,9 +133,26 @@ async function runHuddleSync() {
         ? bulkEntries.map((e) => e.updates.join('\n')).join('\n')
         : msg.text;
 
-      const analysis = await claudeService.matchHuddleToJira(textToMatch, memberName, jiraTasks, cfg.sprintName);
+      // Resolve assigned tasks for this member so Claude can classify the match type
+      let memberAssignedTasks = [];
+      if (sprintId && dbMember) {
+        try {
+          memberAssignedTasks = await taskRepo.findBySprintAndAssignee(sprintId, dbMember.id);
+        } catch (_) {}
+      }
+      // Shape tasks as expected by matchHuddleToJira (key + summary + status)
+      const assignedForMatch = memberAssignedTasks.map((t) => ({
+        key:     t.jira_key,
+        summary: t.title,
+        status:  t.status || 'To Do',
+      }));
 
-      if (analysis.matched && analysis.confidence >= 70 && analysis.issueKey) {
+      const analysis = await claudeService.matchHuddleToJira(
+        textToMatch, memberName, jiraTasks, cfg.sprintName, assignedForMatch
+      );
+
+      // ── 3a. Happy path: matched to THIS member's assigned task ─────────────
+      if (analysis.matchType === 'assigned_task' && analysis.matched && analysis.confidence >= 70 && analysis.issueKey) {
         matched++;
         try { await jiraService.addComment(analysis.issueKey, analysis.commentText); }
         catch (e) { console.error(`Huddle sync: addComment failed for ${analysis.issueKey}:`, e.message); }
@@ -156,8 +175,21 @@ async function runHuddleSync() {
           action: `Matched to ${analysis.issueKey} (confidence: ${analysis.confidence}%)${isBulkPost ? ' [bulk post]' : ''}`,
           success: true, details: analysis.reason,
         });
+
+      // ── 3b. Mismatch: working on someone else's task or different project ───
+      } else if (analysis.matchType === 'unassigned_task' || analysis.matchType === 'different_project') {
+        noMatch++;
+        try {
+          const mismatchMember = dbMember
+            ? { id: dbMember.id, name: member?.name || memberName, slack_user_id: msg.user, email: member?.email || null }
+            : { id: null,        name: memberName,                  slack_user_id: msg.user, email: null };
+          await mismatchService.handleMismatch(orgId, sprintId, mismatchMember, msg.text, analysis);
+        } catch (mismatchErr) {
+          console.error('[cron] mismatchService.handleMismatch error:', mismatchErr.message);
+        }
+
+      // ── 3c. No match: no Jira task found at all ──────────────────────────
       } else {
-        // ── 4. No match → send DM to update Jira ────────────────────────────
         noMatch++;
         const alreadyDMed = activityLog.recentDMExists(msg.user, 'no_match_dm');
         if (!alreadyDMed) {
@@ -183,6 +215,15 @@ async function runHuddleSync() {
             activityLog.addEntry({ type: 'no_match_dm', userId: msg.user, userName: memberName, action: 'No-match DM failed', success: false, details: dmErr.message });
           }
         }
+
+        // Also silently alert team lead for no_match events
+        try {
+          const mismatchMember = dbMember
+            ? { id: dbMember.id, name: member?.name || memberName, slack_user_id: msg.user, email: member?.email || null }
+            : { id: null,        name: memberName,                  slack_user_id: msg.user, email: null };
+          // Pass no_match — mismatchService will skip member DM (already sent above) but will alert lead + record
+          await mismatchService.handleMismatch(orgId, sprintId, mismatchMember, msg.text, { ...analysis, matchType: 'no_match' });
+        } catch (_) { /* non-fatal */ }
       }
 
       // ── 5. If bulk post, flag in performance that updates weren't daily ────

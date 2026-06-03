@@ -29,7 +29,10 @@ app.use('/api/sync',        require('./routes/sync'));
 app.use('/api/report',      require('./routes/report'));
 app.use('/api/performance', require('./routes/performance'));
 app.use('/api/attendance',  require('./routes/attendance'));
-app.use('/api/checkout',    require('./routes/checkout'));
+app.use('/api/checkout',        require('./routes/checkout'));
+app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
+app.use('/api/assignment',     require('./routes/assignment'));
+app.use('/api/mismatch',      require('./routes/mismatch'));
 
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();

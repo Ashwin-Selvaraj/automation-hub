@@ -8,13 +8,15 @@ import SprintTab      from './tabs/SprintTab.jsx';
 import SyncTab         from './tabs/SyncTab.jsx';
 import PerformanceTab  from './tabs/PerformanceTab.jsx';
 import ReportTab       from './tabs/ReportTab.jsx';
-import HowItWorksTab  from './tabs/HowItWorksTab.jsx';
+import HowItWorksTab      from './tabs/HowItWorksTab.jsx';
+import SprintPlanningTab  from './tabs/SprintPlanningTab.jsx';
 
 const { colors, fonts } = theme;
 
 const NAV = [
   { id: 'overview',    label: 'Overview'     },
   { id: 'sprint',      label: 'Sprint'       },
+  { id: 'plan-sprint', label: 'Plan Sprint'  },
   { id: 'sync',        label: 'Sync'         },
   { id: 'performance', label: 'Performance'  },
   { id: 'report',      label: 'Report'       },
@@ -150,7 +152,8 @@ export default function App() {
             {active === 'sprint'      && <SprintTab      {...tabProps} />}
             {active === 'sync'        && <SyncTab        {...tabProps} />}
             {active === 'performance' && <PerformanceTab {...tabProps} />}
-            {active === 'report'      && <ReportTab      {...tabProps} />}
+            {active === 'report'      && <ReportTab        {...tabProps} />}
+            {active === 'plan-sprint' && <SprintPlanningTab {...tabProps} />}
             {active === 'help'        && <HowItWorksTab  {...tabProps} />}
           </div>
         </main>

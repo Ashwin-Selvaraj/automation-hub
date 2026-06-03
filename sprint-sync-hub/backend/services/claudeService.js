@@ -22,29 +22,57 @@ function getClient() {
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 1000;
 
-const MATCH_SYSTEM_PROMPT = `You are a Jira automation assistant. Analyse a developer's standup message and determine if it refers to one of the provided Jira tasks. Use semantic understanding, not just keywords. Consider: task title similarity, technical terms, feature names, action verbs (completed, fixed, deployed, working on, reviewed, merged). Respond ONLY with valid JSON matching the exact schema provided. No preamble, no explanation.`;
+const MATCH_SYSTEM_PROMPT = `You are a Jira automation assistant. Analyse a developer's standup message and determine if it refers to one of the provided Jira tasks. Use semantic understanding, not just keywords. Consider: task title similarity, technical terms, feature names, action verbs (completed, fixed, deployed, working on, reviewed, merged). Respond ONLY with valid JSON matching the exact schema provided. No preamble, no explanation.
+
+Additionally, determine the matchType:
+- "assigned_task": the message matches a task that IS assigned to this specific member
+- "unassigned_task": the message matches a task that EXISTS in Jira but is assigned to someone else or unassigned
+- "different_project": the work described doesn't match any task but seems related to a different project area
+- "no_match": no Jira task matches the described work at all
+
+For mismatchDetails: if matchType is not "assigned_task", write one sentence describing
+what the mismatch is e.g. "Member is working on payment gateway but their assigned task
+is coupon security middleware."`;
 
 /**
  * Analyses a standup message and attempts to match it to a Jira task.
- * @param {string} messageText - The Slack standup message
- * @param {string} memberName - Team member's display name
+ * @param {string} messageText       - The Slack standup message
+ * @param {string} memberName        - Team member's display name
  * @param {Array<{ key: string, summary: string, status: string }>} jiraTasks - Current sprint tasks
- * @param {string} sprintName - Name of the current sprint
- * @returns {Promise<{ matched: boolean, confidence: number, issueKey: string|null, issueTitle: string|null, suggestedStatus: string, commentText: string, reason: string }>}
+ * @param {string} sprintName        - Name of the current sprint
+ * @param {Array<{ key: string, summary: string }>} [assignedTasks] - Tasks assigned to this member
+ * @returns {Promise<{
+ *   matched: boolean, confidence: number,
+ *   issueKey: string|null, issueTitle: string|null,
+ *   suggestedStatus: string, commentText: string, reason: string,
+ *   matchType: "assigned_task"|"unassigned_task"|"different_project"|"no_match",
+ *   mismatchDetails: string|null
+ * }>}
  */
-async function matchHuddleToJira(messageText, memberName, jiraTasks, sprintName) {
+async function matchHuddleToJira(messageText, memberName, jiraTasks, sprintName, assignedTasks) {
   try {
     const client = getClient();
 
-    const taskList = jiraTasks
-      .map((t, i) => `${i + 1}. [${t.key}] ${t.summary} (Status: ${t.status})`)
-      .join('\n');
+    // Split tasks: assigned to this member vs all others
+    const assignedKeys = new Set((assignedTasks || []).map((t) => t.key));
+
+    const assignedList = (assignedTasks && assignedTasks.length > 0)
+      ? assignedTasks.map((t) => `  [${t.key}] ${t.summary} (Status: ${t.status || 'To Do'})`).join('\n')
+      : '  (none)';
+
+    const otherTasks = jiraTasks.filter((t) => !assignedKeys.has(t.key));
+    const otherList = otherTasks.length > 0
+      ? otherTasks.map((t) => `  [${t.key}] ${t.summary} (Status: ${t.status})`).join('\n')
+      : '  (none)';
 
     const userPrompt = `Standup message from ${memberName} in ${sprintName}:
 "${messageText}"
 
-Jira tasks in this sprint:
-${taskList || 'No tasks found'}
+Tasks assigned to ${memberName} this sprint:
+${assignedList}
+
+All other tasks in sprint (not assigned to ${memberName}):
+${otherList}
 
 Respond with a JSON object matching this exact schema:
 {
@@ -54,7 +82,9 @@ Respond with a JSON object matching this exact schema:
   "issueTitle": string or null,
   "suggestedStatus": string (one of: "To Do", "In Progress", "In Review", "Done"),
   "commentText": string (max 2 sentences, written as a standup log entry),
-  "reason": string (brief explanation of your decision)
+  "reason": string (brief explanation of your decision),
+  "matchType": "assigned_task" | "unassigned_task" | "different_project" | "no_match",
+  "mismatchDetails": string or null
 }`;
 
     const res = await client.messages.create({
@@ -69,18 +99,135 @@ Respond with a JSON object matching this exact schema:
     if (!jsonMatch) throw new Error('Claude returned no JSON object');
 
     const parsed = JSON.parse(jsonMatch[0]);
+
+    // Back-compat: derive matchType from old-style matched boolean if missing
+    let matchType = parsed.matchType || null;
+    if (!matchType) {
+      if (parsed.matched && parsed.confidence >= 70 && parsed.issueKey) {
+        matchType = assignedKeys.has(parsed.issueKey) ? 'assigned_task' : 'unassigned_task';
+      } else {
+        matchType = 'no_match';
+      }
+    }
+
     return {
-      matched: Boolean(parsed.matched),
-      confidence: Number(parsed.confidence) || 0,
-      issueKey: parsed.issueKey || null,
-      issueTitle: parsed.issueTitle || null,
+      matched:        Boolean(parsed.matched),
+      confidence:     Number(parsed.confidence) || 0,
+      issueKey:       parsed.issueKey || null,
+      issueTitle:     parsed.issueTitle || null,
       suggestedStatus: parsed.suggestedStatus || 'In Progress',
-      commentText: parsed.commentText || '',
-      reason: parsed.reason || '',
+      commentText:    parsed.commentText || '',
+      reason:         parsed.reason || '',
+      matchType,
+      mismatchDetails: parsed.mismatchDetails || null,
     };
   } catch (err) {
     console.error(`[${new Date().toISOString()}] claudeService.matchHuddleToJira error:`, err.message);
     throw new Error(`Claude matchHuddleToJira failed: ${err.message}`);
+  }
+}
+
+/**
+ * Draft a clarification DM for a member whose standup doesn't match their assigned tasks.
+ * @param {string} memberName
+ * @param {string} messageText
+ * @param {Array<{key:string,title:string}>} assignedTasks
+ * @param {string} matchType
+ * @param {string} mismatchDetails
+ * @param {string} sprintName
+ * @returns {Promise<string>}
+ */
+async function draftMismatchDM(memberName, messageText, assignedTasks, matchType, mismatchDetails, sprintName) {
+  try {
+    const client = getClient();
+
+    const taskLines = (assignedTasks || [])
+      .map((t) => `  • ${t.key || t.jira_key}: ${t.title || t.summary}`)
+      .join('\n') || '  (no tasks assigned yet)';
+
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 250,
+      system: `You are a friendly team assistant. Write a short Slack DM to a developer
+whose standup update doesn't clearly align with their assigned sprint tasks.
+
+Tone rules:
+- Warm and non-accusatory — they may be doing legitimate work
+- Do not assume they are doing something wrong
+- Give them an easy way to respond
+- Maximum 4 sentences
+- End with "— Sprint-Sync Hub"
+- Never say "you should", "you must", or "you need to"`,
+      messages: [{
+        role: 'user',
+        content: `Member: ${memberName}
+Their standup said: "${messageText}"
+Their assigned tasks this sprint (${sprintName}):
+${taskLines}
+
+Situation: ${mismatchDetails || 'The update does not clearly match any assigned sprint task.'}
+
+Write a DM asking them to clarify whether this work is related to their
+sprint tasks or if a new Jira task should be created for it.`,
+      }],
+    });
+
+    return res.content[0]?.text?.trim() ||
+      `Hey ${memberName} 👋 Your update today mentions work that doesn't clearly match your assigned sprint tasks for ${sprintName}. Could you let us know if this is related to one of your current tasks, or whether we should create a new Jira task to track it? — Sprint-Sync Hub`;
+  } catch (err) {
+    console.error('[claudeService.draftMismatchDM]', err.message);
+    return `Hey ${memberName} 👋 Your standup update today doesn't appear to match your assigned tasks in ${sprintName}. Could you clarify whether this work is related to an existing sprint task or if a new one should be created? — Sprint-Sync Hub`;
+  }
+}
+
+/**
+ * Draft a private alert DM to the team lead about a task mismatch.
+ * Factual and concise — not a complaint, just information.
+ * @param {string} memberName
+ * @param {string} messageText
+ * @param {string} matchType
+ * @param {string} mismatchDetails
+ * @param {Array<{key:string,title:string}>} assignedTasks
+ * @returns {Promise<string>}
+ */
+async function draftTeamLeadAlert(memberName, messageText, matchType, mismatchDetails, assignedTasks) {
+  try {
+    const client = getClient();
+
+    const taskLines = (assignedTasks || [])
+      .map((t) => `  • ${t.key || t.jira_key}: ${t.title || t.summary}`)
+      .join('\n') || '  (no tasks assigned)';
+
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 200,
+      system: `You are a team management assistant. Write a brief private Slack DM
+to a team lead alerting them to a potential task mismatch.
+
+Rules:
+- Factual and concise — 3 sentences maximum
+- Present the facts only, no judgement
+- Suggest one simple action the lead can take
+- No emojis except a single ⚠️ at the start
+- Sign off as "Sprint-Sync Hub"`,
+      messages: [{
+        role: 'user',
+        content: `Team member: ${memberName}
+Their standup: "${messageText}"
+Situation: ${mismatchDetails || 'The update does not match their assigned sprint tasks.'}
+Match type: ${matchType}
+Their assigned sprint tasks:
+${taskLines}
+
+Write the alert now.`,
+      }],
+    });
+
+    return res.content[0]?.text?.trim() ||
+      `⚠️ ${memberName} posted a standup update that doesn't clearly match their assigned sprint tasks. ${mismatchDetails || ''} You may want to check in with them or update their sprint assignment. — Sprint-Sync Hub`;
+  } catch (err) {
+    console.error('[claudeService.draftTeamLeadAlert]', err.message);
+    return `⚠️ ${memberName}'s standup update today doesn't appear to match their assigned sprint tasks. ${mismatchDetails || ''} You may want to follow up. — Sprint-Sync Hub`;
   }
 }
 
@@ -388,6 +535,8 @@ module.exports = {
   draftMissingUpdateDM,
   draftDeadlineDM,
   draftCheckoutNudgeDM,
+  draftMismatchDM,
+  draftTeamLeadAlert,
   generateWeeklyReport,
   parseMultiDateStandup,
   testConnection,

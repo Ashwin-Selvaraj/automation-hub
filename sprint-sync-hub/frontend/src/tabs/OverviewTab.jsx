@@ -332,14 +332,27 @@ export default function OverviewTab({ config, navigate }) {
   const [enabled,     setEnabled]     = useState([true, true, true, true]);
   const [perfDash,    setPerfDash]    = useState(null);
   const [popup,        setPopup]        = useState(null); // 'posted' | 'missing' | 'tasks' | 'present' | 'leave' | 'late' | null
-  const [attendance,   setAttendance]   = useState(null); // Zoho data
-  const [checkoutData, setCheckoutData] = useState(null); // checkout status
+  const [attendance,    setAttendance]    = useState(null); // Zoho data
+  const [checkoutData,  setCheckoutData]  = useState(null); // checkout status
+  const [mismatchData,  setMismatchData]  = useState(null); // mismatch alerts
 
   const loadCheckoutStatus = () => {
     fetch(`${API_BASE}/api/checkout/status/today`)
       .then((r) => r.ok ? r.json() : null)
       .catch(() => null)
       .then(setCheckoutData);
+  };
+
+  const resolveMismatch = (eventId) => {
+    fetch(`${API_BASE}/api/mismatch/${eventId}/resolve`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      .then((r) => r.ok ? r.json() : null)
+      .then(() => {
+        setMismatchData((prev) => prev
+          ? { ...prev, events: prev.events.map((e) => e.id === eventId ? { ...e, resolved: true } : e) }
+          : prev
+        );
+      })
+      .catch(console.error);
   };
 
   useEffect(() => {
@@ -350,13 +363,15 @@ export default function OverviewTab({ config, navigate }) {
       fetch(`${API_BASE}/api/performance/dashboard`).then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch(`${API_BASE}/api/attendance/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch(`${API_BASE}/api/checkout/status/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([msgData, issData, logData, perf, att, checkout]) => {
+      fetch(`${API_BASE}/api/mismatch/current`).then((r) => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([msgData, issData, logData, perf, att, checkout, mismatch]) => {
       setMessages(msgData.messages || []);
       setIssues(issData.issues || []);
       setLog(logData.entries || []);
       setPerfDash(perf);
       setAttendance(att);
       setCheckoutData(checkout);
+      setMismatchData(mismatch);
     }).finally(() => setLoading(false));
 
     // Auto-refresh checkout status every 5 minutes
@@ -415,6 +430,56 @@ export default function OverviewTab({ config, navigate }) {
         <h1 style={styles.pageTitle}>Overview</h1>
         <p style={styles.subtitle}>{config?.sprintName || 'Sprint'} · {config?.startDate} → {config?.endDate}</p>
       </div>
+
+      {/* ── Needs Your Attention (mismatch alerts) ── */}
+      {mismatchData && mismatchData.events && mismatchData.events.filter((e) => !e.resolved).length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: colors.amber600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            ⚠️  Needs Your Attention
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {mismatchData.events.filter((e) => !e.resolved).map((evt) => {
+              const hoursAgo = Math.round((Date.now() - new Date(evt.createdAt).getTime()) / 3600000);
+              const timeLabel = hoursAgo < 1 ? 'just now' : `${hoursAgo}h ago`;
+              const typeLabel = evt.matchType === 'unassigned_task' ? 'working on someone else\'s task'
+                : evt.matchType === 'different_project' ? 'work outside project scope'
+                : 'no matching sprint task';
+              return (
+                <div key={evt.id} style={{
+                  background: colors.tintAmber.bg,
+                  border: `1px solid ${colors.tintAmber.border}`,
+                  borderLeft: `3px solid ${colors.amber600}`,
+                  borderRadius: '0 6px 6px 0',
+                  padding: '10px 14px',
+                  display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: colors.gray900, fontFamily: colors.fonts || 'inherit', marginBottom: 2 }}>
+                      {evt.memberName}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#92400E', lineHeight: 1.5, marginBottom: 4 }}>
+                      {evt.mismatchDetails || typeLabel}
+                    </div>
+                    <div style={{ fontSize: 12, color: colors.gray400 }}>
+                      {evt.memberDmSent ? 'DM sent' : 'No DM sent'} · {timeLabel}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => resolveMismatch(evt.id)}
+                    style={{
+                      flexShrink: 0, background: 'white', border: `1px solid ${colors.gray200}`,
+                      borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 600,
+                      color: colors.gray600, cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Resolve
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Metrics */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
