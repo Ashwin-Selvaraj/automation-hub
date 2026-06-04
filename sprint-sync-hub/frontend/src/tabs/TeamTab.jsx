@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { theme, styles } from '../theme.js';
-import { postTeamMembers, getEnvStatus } from '../api.js';
-import Card, { SectionHeader } from '../components/Card.jsx';
+import { postTeamMembers, getEnvStatus, getRoles, getMemberRoles, setMemberRoles } from '../api.js';
+import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
 import Avatar from '../components/Avatar.jsx';
-import Input, { Label, Hint, FormGroup } from '../components/Input.jsx';
+import Input, { Label, FormGroup } from '../components/Input.jsx';
 import Badge from '../components/Badge.jsx';
 import Spinner from '../components/Spinner.jsx';
 
@@ -20,6 +20,240 @@ function parseBulkText(text) {
   const jsonPart = cleaned.startsWith('TEAM_MEMBERS') ? cleaned.replace(/^TEAM_MEMBERS\s*=\s*/, '') : cleaned;
   return JSON.parse(jsonPart);
 }
+
+// ─── Role Pill ────────────────────────────────────────────────────────────────
+
+function RolePill({ name, colour }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      background: colour + '22', color: colour,
+      border: `1px solid ${colour}55`,
+      borderRadius: 4, padding: '2px 7px',
+      fontSize: 11, fontWeight: 600, lineHeight: 1.4,
+      whiteSpace: 'nowrap',
+    }}>
+      {name}
+    </span>
+  );
+}
+
+// ─── Edit Roles Panel ─────────────────────────────────────────────────────────
+
+function EditRolesPanel({ member, allRoles, onSave, onCancel }) {
+  const [assigned, setAssigned]   = useState([]);
+  const [available, setAvailable] = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [saving,    setSaving]    = useState(false);
+  const [error,     setError]     = useState('');
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const data = await getMemberRoles(member.dbId || member.id);
+        const assignedIds = new Set((data.roles || []).map((r) => r.id));
+        setAssigned(allRoles.filter((r) => assignedIds.has(r.id)));
+        setAvailable(allRoles.filter((r) => !assignedIds.has(r.id)));
+      } catch (err) {
+        setError(err.message);
+        setAvailable(allRoles);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [member, allRoles]);
+
+  function moveToAssigned(role) {
+    setAssigned((p) => [...p, role]);
+    setAvailable((p) => p.filter((r) => r.id !== role.id));
+  }
+
+  function moveToAvailable(role) {
+    setAvailable((p) => [...p, role]);
+    setAssigned((p) => p.filter((r) => r.id !== role.id));
+  }
+
+  const hasTechnicalRole = assigned.some((r) => r.role_type === 'technical');
+
+  async function handleSave() {
+    setSaving(true);
+    setError('');
+    try {
+      const result = await setMemberRoles(member.dbId || member.id, assigned.map((r) => r.id));
+      onSave(result, assigned);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <div style={{ padding: '16px 20px' }}><Spinner size={14} /></div>;
+
+  return (
+    <div style={{ padding: '16px 20px', background: colors.blue50, borderTop: `1px solid #C7D2FE` }}>
+      <p style={{ fontSize: 14, fontWeight: 600, color: colors.blue600, marginBottom: 12 }}>
+        {member.name} — Edit Roles
+      </p>
+
+      {error && <p style={{ fontSize: 12, color: colors.red600, marginBottom: 8 }}>{error}</p>}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 12, alignItems: 'start', marginBottom: 12 }}>
+        {/* Available */}
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 600, color: colors.gray600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Available Roles</p>
+          <div style={{ border: `1px solid ${colors.gray200}`, borderRadius: 6, background: colors.white, minHeight: 120, padding: 8 }}>
+            {available.length === 0
+              ? <p style={{ fontSize: 12, color: colors.gray400, textAlign: 'center', padding: 12 }}>All roles assigned</p>
+              : available.map((role) => (
+                <button key={role.id} onClick={() => moveToAssigned(role)} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '6px 8px', border: 'none', background: 'transparent',
+                  borderRadius: 4, cursor: 'pointer', textAlign: 'left',
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = colors.gray50}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: role.colour, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, color: colors.gray700 }}>{role.name}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.gray400 }}>→</span>
+                </button>
+              ))
+            }
+          </div>
+        </div>
+
+        {/* Arrow indicator */}
+        <div style={{ paddingTop: 28, fontSize: 18, color: colors.gray300 }}>⇄</div>
+
+        {/* Assigned */}
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 600, color: colors.gray600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Assigned Roles</p>
+          <div style={{ border: `1px solid ${colors.gray200}`, borderRadius: 6, background: colors.white, minHeight: 120, padding: 8 }}>
+            {assigned.length === 0
+              ? <p style={{ fontSize: 12, color: colors.gray400, textAlign: 'center', padding: 12 }}>No roles assigned</p>
+              : assigned.map((role) => (
+                <button key={role.id} onClick={() => moveToAvailable(role)} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '6px 8px', border: 'none', background: 'transparent',
+                  borderRadius: 4, cursor: 'pointer', textAlign: 'left',
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = colors.gray50}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: role.colour, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, color: colors.gray700, fontWeight: 500 }}>{role.name}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.gray400 }}>←</span>
+                </button>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+
+      {/* DM Status */}
+      <div style={{
+        padding: '8px 12px', borderRadius: 4, marginBottom: 12,
+        background: hasTechnicalRole ? colors.green50 : colors.amber50,
+        border: `1px solid ${hasTechnicalRole ? '#86EFAC' : '#FCD34D'}`,
+      }}>
+        <p style={{ fontSize: 12, color: hasTechnicalRole ? colors.green600 : colors.amber600, margin: 0 }}>
+          {assigned.length === 0
+            ? '○ No roles assigned — will receive automated DMs by default'
+            : hasTechnicalRole
+            ? '✓ Will receive automated DMs (has technical role)'
+            : '○ Will NOT receive automated DMs (managerial only)'
+          }
+        </p>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button variant="primary" size="sm" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save Roles'}
+        </Button>
+        <Button variant="secondary" size="sm" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Member Row with role pills ───────────────────────────────────────────────
+
+const MemberRow = React.memo(function MemberRow({ m, isLast, onRemove, allRoles, onRolesUpdated }) {
+  const [confirming,  setConfirming]  = useState(false);
+  const [editingRoles, setEditingRoles] = useState(false);
+  const [memberRoles,  setMemberRoles_] = useState(m.roles || []);
+  const [toast,       setToast]       = useState('');
+
+  function handleRolesSaved(result, newRoles) {
+    setMemberRoles_(newRoles);
+    setEditingRoles(false);
+    setToast(`Roles updated for ${m.name}`);
+    setTimeout(() => setToast(''), 3000);
+    if (onRolesUpdated) onRolesUpdated(m.id, newRoles);
+  }
+
+  return (
+    <>
+      <tr style={{ borderBottom: isLast && !editingRoles ? 'none' : `1px solid ${colors.gray100}` }}>
+        <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Avatar initials={m.initials || getInitials(m.name)} size={28} />
+            <span style={{ fontSize: 14, fontWeight: 500, color: colors.gray900 }}>{m.name}</span>
+            {toast && <span style={{ fontSize: 12, color: colors.green600 }}>✓ {toast}</span>}
+          </div>
+        </td>
+        <td style={{ padding: '10px 12px', fontFamily: fonts.mono, fontSize: 12, color: colors.gray400, verticalAlign: 'middle' }}>{m.id}</td>
+        <td style={{ padding: '10px 12px', fontSize: 13, verticalAlign: 'middle' }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {memberRoles.length > 0
+              ? memberRoles.map((r) => <RolePill key={r.id || r.roleId || r.name} name={r.name || r.roleName} colour={r.colour || '#6366F1'} />)
+              : <span style={{ color: colors.gray400, fontSize: 13 }}>—</span>
+            }
+          </div>
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'middle', width: 200, minWidth: 200 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <Button variant="secondary" size="sm" onClick={() => { setEditingRoles((v) => !v); setConfirming(false); }}>
+              {editingRoles ? 'Close' : 'Edit Roles'}
+            </Button>
+            <Button variant="danger" size="sm" onClick={() => confirming ? (setConfirming(false), onRemove(m.id)) : setConfirming(true)}>
+              Remove
+            </Button>
+            {confirming && (
+              <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+            )}
+          </div>
+        </td>
+      </tr>
+      {editingRoles && m.dbId && (
+        <tr style={{ borderBottom: isLast ? 'none' : `1px solid ${colors.gray100}` }}>
+          <td colSpan={4} style={{ padding: 0 }}>
+            <EditRolesPanel
+              member={m}
+              allRoles={allRoles}
+              onSave={handleRolesSaved}
+              onCancel={() => setEditingRoles(false)}
+            />
+          </td>
+        </tr>
+      )}
+      {editingRoles && !m.dbId && (
+        <tr style={{ borderBottom: isLast ? 'none' : `1px solid ${colors.gray100}` }}>
+          <td colSpan={4} style={{ padding: '10px 20px' }}>
+            <p style={{ fontSize: 12, color: colors.gray400 }}>
+              Save this member to the database first by using the + Add Member form, then reload the page to edit their roles.
+            </p>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+});
 
 // ─── Bulk Import Panel ────────────────────────────────────────────────────────
 
@@ -56,6 +290,7 @@ function BulkImportPanel({ onImport, saving }) {
           width: '100%', background: colors.white, border: `1px solid ${colors.gray300}`,
           borderRadius: 6, padding: '8px 12px', fontFamily: fonts.mono, fontSize: 12,
           outline: 'none', resize: 'vertical', lineHeight: 1.7, color: colors.gray900,
+          boxSizing: 'border-box',
         }}
       />
       {error && <p style={{ fontSize: 12, color: colors.red600, marginTop: 6 }}>{error}</p>}
@@ -109,7 +344,7 @@ function AddMemberForm({ onSave, onCancel, saving, error }) {
           <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="U0123456789" style={{ fontFamily: fonts.mono }} />
         </FormGroup>
         <FormGroup style={{ marginBottom: 0 }}>
-          <Label>Role (optional)</Label>
+          <Label>Role (optional, legacy)</Label>
           <Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Frontend Engineer" />
         </FormGroup>
       </div>
@@ -124,39 +359,11 @@ function AddMemberForm({ onSave, onCancel, saving, error }) {
   );
 }
 
-// ─── Member Row — each row owns its own confirming state ─────────────────────
-
-const MemberRow = React.memo(function MemberRow({ m, isLast, onRemove }) {
-  const [confirming, setConfirming] = useState(false);
-
-  return (
-    <tr style={{ borderBottom: isLast ? 'none' : `1px solid ${colors.gray100}` }}>
-      <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Avatar initials={m.initials || getInitials(m.name)} size={28} />
-          <span style={{ fontSize: 14, fontWeight: 500, color: colors.gray900 }}>{m.name}</span>
-        </div>
-      </td>
-      <td style={{ padding: '10px 12px', fontFamily: fonts.mono, fontSize: 12, color: colors.gray400, verticalAlign: 'middle' }}>{m.id}</td>
-      <td style={{ padding: '10px 12px', fontSize: 13, color: colors.gray600, verticalAlign: 'middle' }}>{m.role || '—'}</td>
-      <td style={{ padding: '10px 12px', verticalAlign: 'middle', width: 160, minWidth: 160 }}>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <Button variant="danger" size="sm" onClick={() => confirming ? (setConfirming(false), onRemove(m.id)) : setConfirming(true)}>
-            Remove
-          </Button>
-          {confirming && (
-            <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
-          )}
-        </div>
-      </td>
-    </tr>
-  );
-});
-
 // ─── Main Tab ─────────────────────────────────────────────────────────────────
 
 export default function TeamTab({ config, setConfig }) {
   const [members,   setMembers]   = useState(() => config?.teamMembers || []);
+  const [allRoles,  setAllRoles]  = useState([]);
   const [envInfo,   setEnvInfo]   = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [showBulk,  setShowBulk]  = useState(false);
@@ -173,15 +380,30 @@ export default function TeamTab({ config, setConfig }) {
   }, [config]);
 
   useEffect(() => {
-    getEnvStatus().then((s) => {
-      const t = s?.team ?? null;
-      setEnvInfo(t);
-      if (t?.members?.length && !t.isPlaceholder && !t.parseError) {
-        setMembers((prev) => (prev.length === 0 ? t.members : prev));
-        setConfig?.((c) => c ? { ...c, teamMembers: t.members } : c);
-      }
-    }).catch(() => setEnvInfo(null)).finally(() => setLoading(false));
-  }, []);
+    async function init() {
+      setLoading(true);
+      try {
+        const [envStatus, roles] = await Promise.all([
+          getEnvStatus(),
+          getRoles().catch(() => []),
+        ]);
+
+        const t = envStatus?.team ?? null;
+        setEnvInfo(t);
+        setAllRoles(roles);
+
+        if (t?.members?.length && !t.isPlaceholder && !t.parseError) {
+          setMembers((prev) => (prev.length === 0 ? t.members : prev));
+          setConfig?.((c) => c ? { ...c, teamMembers: t.members } : c);
+        }
+      } catch (_) {}
+      setLoading(false);
+    }
+    init();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // members already have dbId from env-status when loaded from DB
+  const enrichedMembers = members.map((m) => ({ ...m }));
 
   async function persistMembers(updated) {
     setSaving(true); setFormError('');
@@ -208,7 +430,7 @@ export default function TeamTab({ config, setConfig }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div>
         <h1 style={styles.pageTitle}>Team Members</h1>
-        <p style={styles.subtitle}>These members are checked daily for standup updates.</p>
+        <p style={styles.subtitle}>Manage team members and their roles. Click "Edit Roles" to assign or change roles for a member.</p>
       </div>
 
       {!loading && envInfo?.parseError && (
@@ -224,7 +446,7 @@ export default function TeamTab({ config, setConfig }) {
       )}
       {!loading && fromEnv && (
         <div style={{ padding: '10px 16px', background: colors.green50, border: `1px solid #86EFAC`, borderRadius: 6 }}>
-          <p style={{ fontSize: 12, color: colors.green600 }}>✓ {envInfo.count} member{envInfo.count !== 1 ? 's' : ''} loaded from TEAM_MEMBERS in backend/.env</p>
+          <p style={{ fontSize: 12, color: colors.green600 }}>✓ {envInfo.count} member{envInfo.count !== 1 ? 's' : ''} loaded from {envInfo.source === 'database' ? 'database' : 'backend/.env'}</p>
         </div>
       )}
 
@@ -269,24 +491,26 @@ export default function TeamTab({ config, setConfig }) {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {['Member', 'Slack ID', 'Role', 'Actions'].map((h) => (
+                  {['Member', 'Slack ID', 'Roles', 'Actions'].map((h) => (
                     <th key={h} style={{
                       fontSize: 11, fontWeight: 600, color: colors.gray600,
                       textTransform: 'uppercase', letterSpacing: '0.05em',
                       padding: '8px 12px', borderBottom: `1px solid ${colors.gray200}`,
                       textAlign: 'left',
-                      ...(h === 'Actions' ? { width: 160, minWidth: 160 } : {}),
+                      ...(h === 'Actions' ? { width: 200, minWidth: 200 } : {}),
                     }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {members.map((m, i) => (
+                {enrichedMembers.map((m, i) => (
                   <MemberRow
                     key={m.id}
                     m={m}
-                    isLast={i === members.length - 1}
+                    isLast={i === enrichedMembers.length - 1}
                     onRemove={handleRemove}
+                    allRoles={allRoles}
+                    onRolesUpdated={null}
                   />
                 ))}
               </tbody>

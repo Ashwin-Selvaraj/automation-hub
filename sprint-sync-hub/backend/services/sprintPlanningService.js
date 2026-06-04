@@ -11,11 +11,12 @@ const jiraService       = require('./jiraService');
 const slackService      = require('./slackService');
 const activityLog       = require('./activityLog');
 const configService     = require('./configService');
-const assignmentEngine  = require('./assignmentEngine');
-const sprintRepo        = require('../repositories/sprintRepository');
-const memberRepo        = require('../repositories/memberRepository');
-const taskRepo          = require('../repositories/taskRepository');
-const statsRepo         = require('../repositories/statsRepository');
+const assignmentEngine     = require('./assignmentEngine');
+const sprintRepo           = require('../repositories/sprintRepository');
+const memberRepo           = require('../repositories/memberRepository');
+const taskRepo             = require('../repositories/taskRepository');
+const statsRepo            = require('../repositories/statsRepository');
+const memberRoleRepository = require('../repositories/memberRoleRepository');
 
 const MODEL = 'claude-sonnet-4-20250514';
 
@@ -91,16 +92,39 @@ Schema for each task:
   "assignmentReason": string
 }`;
 
+  // Build role-aware team description
+  const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+  let membersWithRoles = [];
+  try {
+    membersWithRoles = await memberRoleRepository.getAllMembersWithRoles(orgId);
+  } catch (_) {}
+
+  const roleDataByName = new Map(membersWithRoles.map((m) => [m.name, m]));
+
   const memberLines = teamMembers
-    .map((m) => `- ${m.name} (${m.role || 'Engineer'}, currently has ${m.currentTaskCount} tasks)`)
+    .map((m) => {
+      const roleData = roleDataByName.get(m.name);
+      const techRoles = roleData
+        ? roleData.roles.filter((r) => r.role_type === 'technical').map((r) => r.name)
+        : [];
+      const roleLabel = techRoles.length > 0 ? techRoles.join(', ') : (m.role || 'Engineer');
+      return `- ${m.name}: ${roleLabel} (currently has ${m.currentTaskCount} tasks)`;
+    })
     .join('\n');
 
   const userPrompt = `Sprint: ${sprintName}
 Duration: ${startDate} to ${endDate} (${totalDays} working days)
 Sprint goal: ${goalText}
 
-Team members available:
+Team members available for task assignment (technical roles only):
 ${memberLines}
+
+Important: Only suggest assignees whose roles match the task type.
+Backend tasks → Backend Developer or Full Stack Developer only.
+Frontend tasks → Frontend Developer or Full Stack Developer only.
+AI tasks → AI Engineer only.
+Blockchain tasks → Blockchain Developer only.
+Design tasks → UI/UX Designer only.
 
 Break this into tasks now.`;
 
@@ -150,7 +174,6 @@ Break this into tasks now.`;
   });
 
   // ── Use assignment engine for smart, data-driven suggestions ─────────────
-  const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
   let assignmentPlan;
   try {
     assignmentPlan = await assignmentEngine.generateAssignmentPlan(

@@ -33,6 +33,7 @@ app.use('/api/checkout',        require('./routes/checkout'));
 app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
 app.use('/api/assignment',     require('./routes/assignment'));
 app.use('/api/mismatch',      require('./routes/mismatch'));
+app.use('/api/roles',         require('./routes/roles'));
 
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();
@@ -98,6 +99,24 @@ async function boot() {
       await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null, m.role || null);
     } catch (_) { /* non-fatal */ }
   }
+
+  // 6b. Seed system roles
+  try {
+    const { seedDefaults } = require('./repositories/roleRepository');
+    await seedDefaults(orgId);
+    console.log('Roles seeded successfully');
+  } catch (err) {
+    console.warn('[boot] Role seeding failed (non-fatal):', err.message);
+  }
+
+  // 6c. Log DM-enabled members
+  try {
+    const { getMembersWhoReceiveDMs } = require('./repositories/memberRoleRepository');
+    const dmMembers = await getMembersWhoReceiveDMs(orgId);
+    if (dmMembers.length > 0) {
+      console.log(`DM-enabled members: ${dmMembers.map((m) => m.name).join(', ')}`);
+    }
+  } catch (_) { /* non-fatal — roles table may not exist yet on very first boot */ }
 
   // 7. Start Express
   app.listen(PORT, () => {

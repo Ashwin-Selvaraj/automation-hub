@@ -1,18 +1,36 @@
 'use strict';
 
-const memberRepo       = require('../repositories/memberRepository');
-const sprintRepo       = require('../repositories/sprintRepository');
-const taskRepo         = require('../repositories/taskRepository');
-const standupRepo      = require('../repositories/standupRepository');
-const deadlineRepo     = require('../repositories/deadlineRepository');
-const statsRepo        = require('../repositories/statsRepository');
-const notifRepo        = require('../repositories/notificationRepository');
-const scoringService   = require('./scoringService');
-const slackService     = require('./slackService');
-const jiraService      = require('./jiraService');
-const claudeService    = require('./claudeService');
-const activityLog      = require('./activityLog');
-const { getSprintConfig } = require('../utils/sprintConfig');
+const memberRepo           = require('../repositories/memberRepository');
+const sprintRepo           = require('../repositories/sprintRepository');
+const taskRepo             = require('../repositories/taskRepository');
+const standupRepo          = require('../repositories/standupRepository');
+const deadlineRepo         = require('../repositories/deadlineRepository');
+const statsRepo            = require('../repositories/statsRepository');
+const notifRepo            = require('../repositories/notificationRepository');
+const memberRoleRepository = require('../repositories/memberRoleRepository');
+const scoringService       = require('./scoringService');
+const slackService         = require('./slackService');
+const jiraService          = require('./jiraService');
+const claudeService        = require('./claudeService');
+const activityLog          = require('./activityLog');
+const { getSprintConfig }  = require('../utils/sprintConfig');
+
+/**
+ * Check if a member should receive automated task/standup DMs.
+ * Returns false only if the member has roles and ALL of them are managerial.
+ * Returns true if they have any technical role, or have no roles assigned yet.
+ */
+async function shouldSendTaskDM(memberId) {
+  try {
+    const memberWithRoles = await memberRoleRepository.getMemberWithRoles(memberId);
+    if (!memberWithRoles) return false;
+    if (!memberWithRoles.roles || memberWithRoles.roles.length === 0) return true;
+    return memberWithRoles.shouldReceiveTaskDms;
+  } catch (err) {
+    console.error('[performanceService.shouldSendTaskDM]', err.message);
+    return true; // fail-open: send DM if we can't determine role
+  }
+}
 
 function toDateStr(d) {
   if (!d) return null;
@@ -205,6 +223,21 @@ async function runDailyDeadlineCheck(organisationId, sprintId) {
 
         if (!alreadyNotified && task.slack_user_id) {
           try {
+            // Role-based DM filtering — skip DM for managerial-only members
+            const canReceiveDM = await shouldSendTaskDM(task.assignee_id);
+            if (!canReceiveDM) {
+              if (process.env.TEAM_LEAD_SLACK_ID) {
+                const jiraSiteUrl = process.env.JIRA_SITE_URL || '';
+                const issueUrl = `${jiraSiteUrl.replace(/\/$/, '')}/browse/${task.jira_key}`;
+                const alertText = await claudeService.draftDeadlineDM(
+                  `[For your info] ${task.assignee_name || task.slack_user_id}'s task`,
+                  task.jira_key, task.title, daysOverdue, issueUrl
+                );
+                await slackService.sendDM(process.env.TEAM_LEAD_SLACK_ID, alertText);
+              }
+              continue; // skip member DM
+            }
+
             const jiraSiteUrl = process.env.JIRA_SITE_URL || '';
             const issueUrl = `${jiraSiteUrl.replace(/\/$/, '')}/browse/${task.jira_key}`;
             const dmText = await claudeService.draftDeadlineDM(
@@ -491,6 +524,12 @@ async function recordCheckoutWithoutStandup(organisationId, sprintId, memberId, 
       checked_in:     true,
       check_out_time: checkoutTime,
     });
+
+    // STEP 3b — Role-based DM filtering
+    const canReceiveDM = await shouldSendTaskDM(memberId);
+    if (!canReceiveDM) {
+      return { dmSent: false, alreadyRecorded: false, reason: 'Managerial role exempt' };
+    }
 
     // STEP 4 — Draft the DM
     const member     = await memberRepo.findById(memberId);

@@ -6,12 +6,13 @@
  * Called by cron Job 1 whenever matchHuddleToJira returns a non-assigned-task matchType.
  */
 
-const claudeService  = require('./claudeService');
-const slackService   = require('./slackService');
-const activityLog    = require('./activityLog');
-const notifRepo      = require('../repositories/notificationRepository');
-const taskRepo       = require('../repositories/taskRepository');
-const db             = require('../db');
+const claudeService        = require('./claudeService');
+const slackService         = require('./slackService');
+const activityLog          = require('./activityLog');
+const notifRepo            = require('../repositories/notificationRepository');
+const taskRepo             = require('../repositories/taskRepository');
+const memberRoleRepository = require('../repositories/memberRoleRepository');
+const db                   = require('../db');
 
 /**
  * Central handler for task mismatches.
@@ -67,29 +68,38 @@ async function handleMismatch(organisationId, sprintId, member, messageText, mat
   let leadAlertSent = false;
   let recorded      = false;
 
-  // ── STEP 4: Draft and send member DM (only for unassigned/different_project) ─
+  // ── STEP 4: Draft and send member DM (only for unassigned/different_project,
+  //            and only if member should receive task DMs based on their role) ─
   if (matchType === 'unassigned_task' || matchType === 'different_project') {
-    try {
-      const sprintName = process.env.SPRINT_NAME || 'this sprint';
-      const dmText = await claudeService.draftMismatchDM(
-        member.name,
-        messageText,
-        taskSummary,
-        matchType,
-        details,
-        sprintName,
-      );
-      await slackService.sendDM(slackUserId, dmText);
-      memberDmSent = true;
+    const canReceiveDM = memberId
+      ? await memberRoleRepository.getMemberWithRoles(memberId)
+          .then((m) => !m || !m.roles || m.roles.length === 0 || m.shouldReceiveTaskDms)
+          .catch(() => true)
+      : true;
 
-      // Record notification for idempotency
+    if (canReceiveDM) {
       try {
-        await notifRepo.recordNotification(organisationId, memberId, 'task_mismatch', 'dm', null);
-      } catch (_) { /* non-fatal */ }
+        const sprintName = process.env.SPRINT_NAME || 'this sprint';
+        const dmText = await claudeService.draftMismatchDM(
+          member.name,
+          messageText,
+          taskSummary,
+          matchType,
+          details,
+          sprintName,
+        );
+        await slackService.sendDM(slackUserId, dmText);
+        memberDmSent = true;
 
-      console.log(`[mismatchService] Mismatch DM sent to ${member.name} (${matchType})`);
-    } catch (err) {
-      console.error(`[mismatchService] Member DM failed for ${member.name}:`, err.message);
+        // Record notification for idempotency
+        try {
+          await notifRepo.recordNotification(organisationId, memberId, 'task_mismatch', 'dm', null);
+        } catch (_) { /* non-fatal */ }
+
+        console.log(`[mismatchService] Mismatch DM sent to ${member.name} (${matchType})`);
+      } catch (err) {
+        console.error(`[mismatchService] Member DM failed for ${member.name}:`, err.message);
+      }
     }
   }
   // For no_match the existing no-match DM flow handles the member DM,

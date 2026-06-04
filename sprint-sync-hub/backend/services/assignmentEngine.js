@@ -6,11 +6,12 @@
  * skill profiles, workload, and leave status.
  */
 
-const skillExtraction = require('./skillExtractionService');
-const statsRepo       = require('../repositories/statsRepository');
-const taskRepo        = require('../repositories/taskRepository');
-const memberRepo      = require('../repositories/memberRepository');
-const sprintRepo      = require('../repositories/sprintRepository');
+const skillExtraction      = require('./skillExtractionService');
+const statsRepo            = require('../repositories/statsRepository');
+const taskRepo             = require('../repositories/taskRepository');
+const memberRepo           = require('../repositories/memberRepository');
+const sprintRepo           = require('../repositories/sprintRepository');
+const memberRoleRepository = require('../repositories/memberRoleRepository');
 
 // Lazy-load zohoService to avoid crashes when Zoho is not configured
 function tryZoho() {
@@ -44,16 +45,20 @@ function scoreMemberForTask(member, task, skillProfiles, sprintSummaries, isOnLe
   const reasons = [];
   let score     = 50;
 
-  // ── SKILL MATCH (+30 max) ─────────────────────────────────────────────────
+  // ── SKILL MATCH (+40 max — historical + role-based keywords) ────────────────
   const profile     = skillProfiles.get(member.id) || { topSkills: [], recentSkills: [] };
   const skillTags   = (task.skillTags || []).map((t) => t.toLowerCase());
   const recentLower = profile.recentSkills.map((s) => s.toLowerCase());
   const topLower    = profile.topSkills.map((s) => s.skill.toLowerCase());
 
+  // Role keywords from all technical roles combined
+  const roleKeywords = (member.allSkillKeywords || []).map((k) => k.toLowerCase());
+
   let skillScore  = 0;
   const matchedR  = [];
   const matchedT  = [];
   const matchedP  = [];
+  const matchedRK = [];
 
   for (const tag of skillTags) {
     if (recentLower.includes(tag)) {
@@ -65,10 +70,13 @@ function scoreMemberForTask(member, task, skillProfiles, sprintSummaries, isOnLe
     } else if (topLower.some((s) => s.includes(tag) || tag.includes(s))) {
       skillScore += 4;
       matchedP.push(tag);
+    } else if (roleKeywords.some((k) => k === tag || k.includes(tag) || tag.includes(k))) {
+      skillScore += 12;
+      matchedRK.push(tag);
     }
   }
 
-  skillScore = Math.min(30, skillScore);
+  skillScore = Math.min(40, skillScore);
   score     += skillScore;
 
   if (matchedR.length > 0) {
@@ -81,8 +89,50 @@ function scoreMemberForTask(member, task, skillProfiles, sprintSummaries, isOnLe
   if (matchedP.length > 0) {
     reasons.push(`✓ Related skills: ${matchedP.join(', ')}`);
   }
+  if (matchedRK.length > 0) {
+    reasons.push(`✓ Role skill match: ${matchedRK.join(', ')}`);
+  }
   if (skillTags.length > 0 && skillScore === 0) {
     reasons.push('No historical skill match');
+  }
+
+  // ── ROLE TYPE ALIGNMENT (+15 bonus / hard exclude) ────────────────────────
+  const FRONTEND_TAGS   = ['react','vue','angular','css','html','ui','frontend','component','next.js','tailwind','typescript','javascript','webpack'];
+  const BACKEND_TAGS    = ['node.js','python','api','rest','database','backend','server','postgresql','mongodb','express','django','graphql','sql'];
+  const AI_TAGS         = ['ai','ml','model','llm','training','machine learning','neural network','nlp','tensorflow','pytorch','rag','embedding'];
+  const BLOCKCHAIN_TAGS = ['blockchain','smart contract','web3','solidity','ethereum','crypto','nft','defi','erc20','decentralised'];
+  const DESIGN_TAGS     = ['figma','wireframe','ux','design','mockup','prototype','user research','design system','typography','accessibility'];
+
+  const tagsLower = skillTags;
+  const memberSlugs = (member.roleSlugs || []);
+
+  let taskDomain = null;
+  if (tagsLower.some((t) => FRONTEND_TAGS.includes(t)))   taskDomain = 'frontend';
+  else if (tagsLower.some((t) => BACKEND_TAGS.includes(t)))    taskDomain = 'backend';
+  else if (tagsLower.some((t) => AI_TAGS.includes(t)))         taskDomain = 'ai';
+  else if (tagsLower.some((t) => BLOCKCHAIN_TAGS.includes(t))) taskDomain = 'blockchain';
+  else if (tagsLower.some((t) => DESIGN_TAGS.includes(t)))     taskDomain = 'design';
+
+  if (taskDomain) {
+    const isFullStack = memberSlugs.includes('full_stack_developer');
+
+    const domainAligned =
+      (taskDomain === 'frontend'   && (memberSlugs.includes('frontend_developer')    || isFullStack)) ||
+      (taskDomain === 'backend'    && (memberSlugs.includes('backend_developer')     || isFullStack)) ||
+      (taskDomain === 'ai'         && memberSlugs.includes('ai_engineer'))    ||
+      (taskDomain === 'blockchain' && memberSlugs.includes('blockchain_developer')) ||
+      (taskDomain === 'design'     && memberSlugs.includes('ui_ux_designer'));
+
+    if (domainAligned) {
+      score += 15;
+      reasons.push(`✓ Role aligned: ${taskDomain} task → ${member.name}'s primary role`);
+    } else if (!isFullStack && roleKeywords.length > 0) {
+      // Hard exclude: member has roles but none match the domain
+      const hasAnyDomainKeyword = tagsLower.some((t) => roleKeywords.includes(t));
+      if (!hasAnyDomainKeyword) {
+        return { score: 0, reasons: [`✗ Role mismatch: ${taskDomain} task not in member's skill set`] };
+      }
+    }
   }
 
   // ── WORKLOAD (-20..+5) ────────────────────────────────────────────────────
@@ -206,9 +256,37 @@ async function generateAssignmentPlan(tasks, members, organisationId, sprintData
     );
   }
 
+  // ── 3b. Enrich members with role data and filter eligible ones ──────────────
+  let membersWithRoles = [];
+  try {
+    membersWithRoles = await memberRoleRepository.getAllMembersWithRoles(orgId);
+  } catch (err) {
+    console.warn('[assignmentEngine] Could not load role data:', err.message);
+  }
+
+  const roleDataByMemberId = new Map(membersWithRoles.map((m) => [m.memberId, m]));
+
+  // Filter: only members who have at least one role that allows task assignment,
+  // or who have no roles assigned at all (default: assignable)
+  const eligibleMembers = members.filter((m) => {
+    const roleData = roleDataByMemberId.get(m.id);
+    if (!roleData || !roleData.roles || roleData.roles.length === 0) return true; // no roles = eligible
+    return roleData.roles.some((r) => r.can_be_assigned_tasks);
+  });
+
+  // Attach role metadata to each member for scoring
+  const enrichedMemberBase = eligibleMembers.map((m) => {
+    const roleData = roleDataByMemberId.get(m.id) || {};
+    return {
+      ...m,
+      allSkillKeywords: roleData.allSkillKeywords || [],
+      roleSlugs:        (roleData.roles || []).map((r) => r.slug),
+    };
+  });
+
   // ── 4. Build plan for each task ──────────────────────────────────────────
   // Track how many tasks we've assigned to each member within this plan
-  const planTaskCounts = new Map(members.map((m) => [m.id, 0]));
+  const planTaskCounts = new Map(enrichedMemberBase.map((m) => [m.id, 0]));
 
   const plan = [];
 
@@ -216,7 +294,7 @@ async function generateAssignmentPlan(tasks, members, organisationId, sprintData
     const task = tasks[i];
 
     // Build enriched members with plan task counts
-    const enrichedMembers = members.map((m) => ({
+    const enrichedMembers = enrichedMemberBase.map((m) => ({
       ...m,
       currentTaskCount: (m.currentTaskCount || 0) + (planTaskCounts.get(m.id) || 0),
     }));

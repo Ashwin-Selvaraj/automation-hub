@@ -10,6 +10,7 @@ import PerformanceTab  from './tabs/PerformanceTab.jsx';
 import ReportTab       from './tabs/ReportTab.jsx';
 import HowItWorksTab      from './tabs/HowItWorksTab.jsx';
 import SprintPlanningTab  from './tabs/SprintPlanningTab.jsx';
+import RolesTab           from './tabs/RolesTab.jsx';
 
 const { colors, fonts } = theme;
 
@@ -22,6 +23,7 @@ const NAV = [
   { id: 'report',      label: 'Report'       },
   { id: 'connections', label: 'Connections'  },
   { id: 'team',        label: 'Team'         },
+  { id: 'roles',       label: 'Roles'        },
   { id: 'help',        label: 'Help'         },
 ];
 
@@ -154,6 +156,7 @@ export default function App() {
             {active === 'performance' && <PerformanceTab {...tabProps} />}
             {active === 'report'      && <ReportTab        {...tabProps} />}
             {active === 'plan-sprint' && <SprintPlanningTab {...tabProps} />}
+            {active === 'roles'       && <RolesTab        {...tabProps} />}
             {active === 'help'        && <HowItWorksTab  {...tabProps} />}
           </div>
         </main>

@@ -30,3 +30,16 @@ export const getSyncLog = (limit = 50) => request(`/api/sync/log?limit=${limit}`
 
 export const generateReport = (weekIndex = 0) => request('/api/report/generate', { method: 'POST', body: JSON.stringify({ weekIndex }) });
 export const postReport = (report) => request('/api/report/post', { method: 'POST', body: JSON.stringify({ report }) });
+
+// Roles
+export const getRoles      = (type) => request(`/api/roles${type ? `?type=${type}` : ''}`);
+export const createRole    = (body) => request('/api/roles', { method: 'POST', body: JSON.stringify(body) });
+export const updateRole    = (roleId, body) => request(`/api/roles/${roleId}`, { method: 'PATCH', body: JSON.stringify(body) });
+export const deleteRole    = (roleId) => request(`/api/roles/${roleId}`, { method: 'DELETE' });
+export const getRoleMembers = (roleId) => request(`/api/roles/${roleId}/members`);
+
+// Member roles
+export const getMemberRoles    = (memberId) => request(`/api/roles/members/${memberId}/roles`);
+export const setMemberRoles    = (memberId, roleIds, updatedBy) => request(`/api/roles/members/${memberId}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds, updatedBy }) });
+export const addMemberRole     = (memberId, roleId) => request(`/api/roles/members/${memberId}/roles/${roleId}`, { method: 'POST', body: JSON.stringify({}) });
+export const removeMemberRole  = (memberId, roleId) => request(`/api/roles/members/${memberId}/roles/${roleId}`, { method: 'DELETE', body: JSON.stringify({}) });
