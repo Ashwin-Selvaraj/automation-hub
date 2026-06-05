@@ -173,7 +173,7 @@ async function getSprintSummary(memberId, sprintId) {
 async function getAllSprintSummaries(sprintId) {
   try {
     const { rows } = await db.query(
-      `SELECT mss.*, m.name, m.slack_user_id, m.role
+      `SELECT mss.*, m.name, m.slack_user_id
        FROM member_sprint_summary mss
        JOIN members m ON mss.member_id = m.id
        WHERE mss.sprint_id = $1
@@ -246,7 +246,7 @@ async function getOverallStats(memberId, organisationId) {
 async function getLeaderboard(organisationId, sprintId) {
   try {
     const { rows } = await db.query(
-      `SELECT mss.*, m.name, m.slack_user_id, m.role,
+      `SELECT mss.*, m.name, m.slack_user_id,
               ROW_NUMBER() OVER (ORDER BY mss.performance_score DESC) AS rank
        FROM member_sprint_summary mss
        JOIN members m ON mss.member_id = m.id

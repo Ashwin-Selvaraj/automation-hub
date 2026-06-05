@@ -101,11 +101,10 @@ async function syncMemberStandup(organisationId, sprintId, slackMessage) {
   if (!slackUserId) return null;
 
   const memberCfg = cfg.teamMembers.find((m) => m.id === slackUserId);
-  const name = memberCfg?.name || slackUserId;
+  const name  = memberCfg?.name  || slackUserId;
   const email = memberCfg?.email || null;
-  const role = memberCfg?.role || null;
 
-  const member = await memberRepo.findOrCreate(organisationId, slackUserId, name, email, role);
+  const member = await memberRepo.findOrCreate(organisationId, slackUserId, name, email);
   const postDate = toDateStr(new Date(parseFloat(slackMessage.ts) * 1000));
 
   const standupPost = await standupRepo.recordPost(

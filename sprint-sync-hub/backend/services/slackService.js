@@ -125,4 +125,90 @@ async function testConnection() {
   }
 }
 
-module.exports = { getChannelMessages, sendDM, postToChannel, getUserInfo, testConnection };
+/**
+ * Fetch email addresses for all team members from Slack using their Slack user IDs.
+ * Skips members who already have an email. Stores fetched emails in the DB.
+ *
+ * Required Slack scope: users:read.email
+ * If this scope is missing, individual calls will fail with 'missing_scope'.
+ *
+ * @param {number} organisationId
+ * @returns {Promise<{ fetched: Array, failed: Array, skipped: Array }>}
+ */
+async function fetchAndStoreSlackEmails(organisationId) {
+  const memberRepository = require('../repositories/memberRepository');
+  const members  = await memberRepository.findAll(organisationId);
+  const results  = { fetched: [], failed: [], skipped: [] };
+
+  for (const member of members) {
+    if (member.email) {
+      results.skipped.push({
+        memberId:    member.id,
+        name:        member.name,
+        reason:      `Already has email: ${member.email}`,
+      });
+      continue;
+    }
+
+    if (!member.slack_user_id) {
+      results.failed.push({
+        memberId:    member.id,
+        name:        member.name,
+        slackUserId: null,
+        reason:      'No Slack user ID on record',
+      });
+      continue;
+    }
+
+    try {
+      const slack    = getClient();
+      const response = await slack.users.info({ user: member.slack_user_id });
+
+      if (response.ok && response.user?.profile?.email) {
+        const email = response.user.profile.email;
+        await memberRepository.updateEmail(member.id, email);
+        results.fetched.push({
+          memberId:    member.id,
+          name:        member.name,
+          slackUserId: member.slack_user_id,
+          email,
+        });
+      } else {
+        const reason = response.error === 'missing_scope'
+          ? 'users:read.email scope missing — add it in api.slack.com/apps under OAuth & Permissions → Bot Token Scopes'
+          : 'Email not available in Slack profile — ask member to make their email visible';
+        results.failed.push({
+          memberId:    member.id,
+          name:        member.name,
+          slackUserId: member.slack_user_id,
+          reason,
+        });
+      }
+    } catch (err) {
+      const slackErr = err.data?.error || err.message;
+      const reason   = slackErr === 'missing_scope'
+        ? 'users:read.email scope missing — add it in api.slack.com/apps under OAuth & Permissions → Bot Token Scopes'
+        : slackErr;
+      results.failed.push({
+        memberId:    member.id,
+        name:        member.name,
+        slackUserId: member.slack_user_id,
+        reason,
+      });
+    }
+
+    // 100 ms delay between requests to respect Slack rate limits
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return results;
+}
+
+module.exports = {
+  getChannelMessages,
+  sendDM,
+  postToChannel,
+  getUserInfo,
+  testConnection,
+  fetchAndStoreSlackEmails,
+};

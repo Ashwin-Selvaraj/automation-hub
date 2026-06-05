@@ -43,7 +43,6 @@ router.post('/breakdown', async (req, res) => {
         return {
           id:               m.id,
           name:             m.name,
-          role:             m.role || 'Engineer',
           currentTaskCount,
         };
       })

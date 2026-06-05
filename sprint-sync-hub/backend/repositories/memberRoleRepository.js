@@ -1,10 +1,12 @@
 'use strict';
 
-const db = require('../db');
+const { query, getClient } = require('../db');
+
+// ─── getMemberRoles ───────────────────────────────────────────────────────────
 
 async function getMemberRoles(memberId) {
   try {
-    const { rows } = await db.query(
+    const { rows } = await query(
       `SELECT mr.id, mr.role_id, r.name AS role_name, r.slug AS role_slug,
               r.role_type, r.colour, r.receives_task_dms, r.can_be_assigned_tasks,
               mr.assigned_at
@@ -15,10 +17,14 @@ async function getMemberRoles(memberId) {
       [memberId]
     );
     return rows.map((r) => ({
-      id:                 r.id,
+      id:                 r.role_id,          // role DB id  (integer)
+      memberRoleId:       r.id,               // join-table row id
       roleId:             r.role_id,
+      name:               r.role_name,
       roleName:           r.role_name,
+      slug:               r.role_slug,
       roleSlug:           r.role_slug,
+      role_type:          r.role_type,
       roleType:           r.role_type,
       colour:             r.colour,
       receivesDms:        r.receives_task_dms,
@@ -31,16 +37,18 @@ async function getMemberRoles(memberId) {
   }
 }
 
+// ─── getMemberWithRoles ───────────────────────────────────────────────────────
+
 async function getMemberWithRoles(memberId) {
   try {
-    const { rows: memberRows } = await db.query(
+    const { rows: memberRows } = await query(
       'SELECT * FROM members WHERE id = $1',
       [memberId]
     );
     if (!memberRows[0]) return null;
     const member = memberRows[0];
 
-    const { rows: roleRows } = await db.query(
+    const { rows: roleRows } = await query(
       `SELECT r.id, r.name, r.slug, r.role_type, r.colour,
               r.receives_task_dms, r.can_be_assigned_tasks, r.skill_keywords,
               mr.assigned_at
@@ -52,24 +60,23 @@ async function getMemberWithRoles(memberId) {
     );
 
     const roles = roleRows.map((r) => ({
-      id:                 r.id,
-      name:               r.name,
-      slug:               r.slug,
-      role_type:          r.role_type,
-      colour:             r.colour,
-      receives_task_dms:  r.receives_task_dms,
+      id:                    r.id,
+      name:                  r.name,
+      slug:                  r.slug,
+      role_type:             r.role_type,
+      colour:                r.colour,
+      receives_task_dms:     r.receives_task_dms,
       can_be_assigned_tasks: r.can_be_assigned_tasks,
-      skill_keywords:     r.skill_keywords || [],
-      assignedAt:         r.assigned_at,
+      skill_keywords:        r.skill_keywords || [],
+      assignedAt:            r.assigned_at,
     }));
 
-    const hasTechnicalRole  = roles.some((r) => r.role_type === 'technical');
-    const hasManagerialRole = roles.some((r) => r.role_type === 'managerial');
+    const hasTechnicalRole     = roles.some((r) => r.role_type === 'technical');
+    const hasManagerialRole    = roles.some((r) => r.role_type === 'managerial');
     const shouldReceiveTaskDms = roles.length === 0
       ? true
       : roles.some((r) => r.role_type === 'technical' && r.receives_task_dms);
 
-    // Combine all skill keywords from technical roles
     const allSkillKeywords = [...new Set(
       roles.filter((r) => r.role_type === 'technical').flatMap((r) => r.skill_keywords || [])
     )];
@@ -79,6 +86,9 @@ async function getMemberWithRoles(memberId) {
       name:                member.name,
       slackUserId:         member.slack_user_id,
       email:               member.email,
+      jiraAccountId:       member.jira_account_id,
+      jiraAccountIdSource: member.jira_account_id_source,
+      isActive:            member.is_active,
       roles,
       hasTechnicalRole,
       hasManagerialRole,
@@ -91,14 +101,16 @@ async function getMemberWithRoles(memberId) {
   }
 }
 
+// ─── getAllMembersWithRoles ───────────────────────────────────────────────────
+
 async function getAllMembersWithRoles(organisationId) {
   try {
-    const { rows: members } = await db.query(
+    const { rows: members } = await query(
       'SELECT * FROM members WHERE organisation_id = $1 AND is_active = true ORDER BY name',
       [organisationId]
     );
 
-    const { rows: allRoleRows } = await db.query(
+    const { rows: allRoleRows } = await query(
       `SELECT mr.member_id, r.id, r.name, r.slug, r.role_type, r.colour,
               r.receives_task_dms, r.can_be_assigned_tasks, r.skill_keywords,
               mr.assigned_at
@@ -110,7 +122,6 @@ async function getAllMembersWithRoles(organisationId) {
       [organisationId]
     );
 
-    // Group role rows by member_id
     const rolesByMember = {};
     for (const row of allRoleRows) {
       if (!rolesByMember[row.member_id]) rolesByMember[row.member_id] = [];
@@ -129,8 +140,8 @@ async function getAllMembersWithRoles(organisationId) {
 
     return members.map((member) => {
       const roles = rolesByMember[member.id] || [];
-      const hasTechnicalRole  = roles.some((r) => r.role_type === 'technical');
-      const hasManagerialRole = roles.some((r) => r.role_type === 'managerial');
+      const hasTechnicalRole     = roles.some((r) => r.role_type === 'technical');
+      const hasManagerialRole    = roles.some((r) => r.role_type === 'managerial');
       const shouldReceiveTaskDms = roles.length === 0
         ? true
         : roles.some((r) => r.role_type === 'technical' && r.receives_task_dms);
@@ -139,9 +150,13 @@ async function getAllMembersWithRoles(organisationId) {
       )];
       return {
         memberId:            member.id,
+        id:                  member.id,
         name:                member.name,
         slackUserId:         member.slack_user_id,
         email:               member.email,
+        jiraAccountId:       member.jira_account_id,
+        jiraAccountIdSource: member.jira_account_id_source,
+        isActive:            member.is_active,
         roles,
         hasTechnicalRole,
         hasManagerialRole,
@@ -155,39 +170,101 @@ async function getAllMembersWithRoles(organisationId) {
   }
 }
 
-async function assignRole(memberId, roleId, assignedBy) {
-  try {
-    // Check for existing active assignment
-    const { rows: existing } = await db.query(
-      'SELECT * FROM member_roles WHERE member_id = $1 AND role_id = $2 AND is_active = true',
-      [memberId, roleId]
-    );
-    if (existing[0]) return existing[0];
+// ─── setMemberRoles — atomic transaction ─────────────────────────────────────
 
-    // Re-activate a removed assignment if one exists
-    const { rows: inactive } = await db.query(
-      'SELECT * FROM member_roles WHERE member_id = $1 AND role_id = $2 AND is_active = false LIMIT 1',
-      [memberId, roleId]
+async function setMemberRoles(memberId, newRoleIds, updatedBy) {
+  // Ensure IDs are integers
+  const parsedNewIds = (newRoleIds || []).map((id) => parseInt(id, 10)).filter(Boolean);
+  const parsedUpdatedBy = updatedBy ? parseInt(updatedBy, 10) : null;
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    // Step 1: Get currently active role IDs
+    const currentResult = await client.query(
+      `SELECT role_id FROM member_roles WHERE member_id = $1 AND is_active = true`,
+      [memberId]
     );
-    if (inactive[0]) {
-      const { rows } = await db.query(
+    const currentRoleIds = currentResult.rows.map((r) => r.role_id);
+
+    // Step 2: Calculate diff
+    const toAdd    = parsedNewIds.filter((id) => !currentRoleIds.includes(id));
+    const toRemove = currentRoleIds.filter((id) => !parsedNewIds.includes(id));
+    const unchanged = currentRoleIds.filter((id) => parsedNewIds.includes(id));
+
+    console.log(`[setMemberRoles] Member ${memberId}: adding [${toAdd}], removing [${toRemove}], unchanged [${unchanged}]`);
+
+    // Step 3: Soft-delete removed roles
+    for (const roleId of toRemove) {
+      const r = await client.query(
         `UPDATE member_roles
-         SET is_active = true, removed_at = NULL, removed_by = NULL,
-             assigned_at = NOW(), assigned_by = $1
-         WHERE id = $2 RETURNING *`,
-        [assignedBy || null, inactive[0].id]
+         SET is_active = false, removed_at = NOW(), removed_by = $1
+         WHERE member_id = $2 AND role_id = $3 AND is_active = true`,
+        [parsedUpdatedBy, memberId, roleId]
       );
-      return rows[0];
+      console.log(`[setMemberRoles] Removed role ${roleId} from member ${memberId}: ${r.rowCount} row(s) updated`);
     }
 
-    // Get organisation_id from member
-    const { rows: memberRows } = await db.query('SELECT organisation_id FROM members WHERE id = $1', [memberId]);
+    // Step 4: Insert or reactivate new roles
+    // The UNIQUE(member_id, role_id) constraint (from migration 011) allows
+    // ON CONFLICT to target exactly one row and flip it back to active.
+    for (const roleId of toAdd) {
+      const r = await client.query(
+        `INSERT INTO member_roles
+           (member_id, role_id, organisation_id, is_active, assigned_at, assigned_by)
+         VALUES (
+           $1, $2,
+           (SELECT organisation_id FROM members WHERE id = $1),
+           true, NOW(), $3
+         )
+         ON CONFLICT (member_id, role_id)
+         DO UPDATE SET
+           is_active   = true,
+           assigned_at = NOW(),
+           assigned_by = $3,
+           removed_at  = NULL,
+           removed_by  = NULL`,
+        [memberId, roleId, parsedUpdatedBy]
+      );
+      console.log(`[setMemberRoles] Added role ${roleId} to member ${memberId}: ${r.rowCount} row(s) affected`);
+    }
+
+    await client.query('COMMIT');
+
+    // Return updated role list
+    const updated = await getMemberRoles(memberId);
+    return { added: toAdd, removed: toRemove, unchanged, roles: updated };
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(`[setMemberRoles] ROLLBACK for member ${memberId}:`, err.message);
+    throw new Error(`setMemberRoles failed: ${err.message}`);
+  } finally {
+    client.release();
+  }
+}
+
+// ─── assignRole ──────────────────────────────────────────────────────────────
+
+async function assignRole(memberId, roleId, assignedBy) {
+  try {
+    const { rows: memberRows } = await query('SELECT organisation_id FROM members WHERE id = $1', [memberId]);
     const orgId = memberRows[0]?.organisation_id;
 
-    const { rows } = await db.query(
-      `INSERT INTO member_roles (organisation_id, member_id, role_id, assigned_by)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [orgId, memberId, roleId, assignedBy || null]
+    const { rows } = await query(
+      `INSERT INTO member_roles
+         (member_id, role_id, organisation_id, is_active, assigned_at, assigned_by)
+       VALUES ($1, $2, $3, true, NOW(), $4)
+       ON CONFLICT (member_id, role_id)
+       DO UPDATE SET
+         is_active   = true,
+         assigned_at = NOW(),
+         assigned_by = $4,
+         removed_at  = NULL,
+         removed_by  = NULL
+       RETURNING *`,
+      [memberId, roleId, orgId, assignedBy || null]
     );
     return rows[0];
   } catch (err) {
@@ -196,9 +273,11 @@ async function assignRole(memberId, roleId, assignedBy) {
   }
 }
 
+// ─── removeRole ──────────────────────────────────────────────────────────────
+
 async function removeRole(memberId, roleId, removedBy) {
   try {
-    const { rows } = await db.query(
+    const { rows } = await query(
       `UPDATE member_roles
        SET is_active = false, removed_at = NOW(), removed_by = $1
        WHERE member_id = $2 AND role_id = $3 AND is_active = true
@@ -212,28 +291,11 @@ async function removeRole(memberId, roleId, removedBy) {
   }
 }
 
-async function setMemberRoles(memberId, newRoleIds, updatedBy) {
-  try {
-    const current = await getMemberRoles(memberId);
-    const currentIds = current.map((r) => r.roleId);
-
-    const toAdd    = newRoleIds.filter((id) => !currentIds.includes(id));
-    const toRemove = currentIds.filter((id) => !newRoleIds.includes(id));
-    const unchanged = currentIds.filter((id) => newRoleIds.includes(id));
-
-    await Promise.all(toRemove.map((roleId) => removeRole(memberId, roleId, updatedBy)));
-    await Promise.all(toAdd.map((roleId)    => assignRole(memberId, roleId, updatedBy)));
-
-    return { added: toAdd, removed: toRemove, unchanged };
-  } catch (err) {
-    console.error('[memberRoleRepository.setMemberRoles]', err.message);
-    throw err;
-  }
-}
+// ─── getMembersWithRole ───────────────────────────────────────────────────────
 
 async function getMembersWithRole(organisationId, roleSlug) {
   try {
-    const { rows } = await db.query(
+    const { rows } = await query(
       `SELECT m.id, m.name, m.slack_user_id, m.email, mr.assigned_at
        FROM members m
        JOIN member_roles mr ON mr.member_id = m.id AND mr.is_active = true
@@ -249,16 +311,15 @@ async function getMembersWithRole(organisationId, roleSlug) {
   }
 }
 
+// ─── getMembersWhoReceiveDMs ──────────────────────────────────────────────────
+
 async function getMembersWhoReceiveDMs(organisationId) {
   try {
-    // Members who have at least one technical role with receives_task_dms = true,
-    // plus members with NO roles assigned (default = receives DMs)
-    const { rows } = await db.query(
+    const { rows } = await query(
       `SELECT DISTINCT m.id, m.name, m.slack_user_id, m.email
        FROM members m
        WHERE m.organisation_id = $1 AND m.is_active = true
          AND (
-           -- Has at least one technical role that receives DMs
            EXISTS (
              SELECT 1 FROM member_roles mr
              JOIN roles r ON r.id = mr.role_id
@@ -266,9 +327,7 @@ async function getMembersWhoReceiveDMs(organisationId) {
                AND r.is_active = true AND r.role_type = 'technical'
                AND r.receives_task_dms = true
            )
-           OR
-           -- Has no roles assigned at all (default: receives DMs)
-           NOT EXISTS (
+           OR NOT EXISTS (
              SELECT 1 FROM member_roles mr
              WHERE mr.member_id = m.id AND mr.is_active = true
            )
@@ -283,9 +342,11 @@ async function getMembersWhoReceiveDMs(organisationId) {
   }
 }
 
+// ─── getRoleHistory ───────────────────────────────────────────────────────────
+
 async function getRoleHistory(memberId) {
   try {
-    const { rows } = await db.query(
+    const { rows } = await query(
       `SELECT mr.id, r.id AS role_id, r.name AS role_name, r.slug AS role_slug,
               r.role_type, r.colour, mr.assigned_at, mr.removed_at, mr.is_active
        FROM member_roles mr

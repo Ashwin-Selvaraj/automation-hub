@@ -87,7 +87,7 @@ router.post('/team', async (req, res) => {
     const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
     for (const m of members) {
       try {
-        await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null, m.role || null);
+        await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null);
       } catch (_) {}
     }
 
@@ -133,7 +133,7 @@ router.get('/env-status', async (req, res) => {
     try { const p = JSON.parse(rawTeam); envMembers = Array.isArray(p) ? p : []; } catch (_) {}
 
     const parsedTeam = dbMembers.length > 0
-      ? dbMembers.map((m) => ({ id: m.slack_user_id, dbId: m.id, name: m.name, role: m.role }))
+      ? dbMembers.map((m) => ({ id: m.slack_user_id, dbId: m.id, name: m.name }))
       : envMembers;
 
     const isPlaceholder = parsedTeam.some((m) => m.id && m.id.startsWith('U00000000'));

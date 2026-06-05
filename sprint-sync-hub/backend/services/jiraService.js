@@ -379,8 +379,79 @@ async function createIssuesBatch(issues) {
   return results;
 }
 
+/**
+ * Fetch Jira account IDs for all team members by searching Jira by email.
+ * Skips members who already have a manually-set Jira ID.
+ * Uses a 200 ms delay between requests to avoid Jira rate limits.
+ *
+ * @param {number} organisationId
+ * @returns {Promise<{ matched: Array, notFound: Array, noEmail: Array }>}
+ */
+async function fetchAndStoreJiraAccountIds(organisationId) {
+  const memberRepository = require('../repositories/memberRepository');
+  const members  = await memberRepository.findAll(organisationId);
+  const results  = { matched: [], notFound: [], noEmail: [] };
+
+  for (const member of members) {
+    // Skip if already has a manually-set ID
+    if (member.jira_account_id && member.jira_account_id_source === 'manual') {
+      continue;
+    }
+
+    if (!member.email) {
+      results.noEmail.push({ memberId: member.id, name: member.name });
+      continue;
+    }
+
+    try {
+      const client   = getClient();
+      const response = await client.get(
+        `/user/search?query=${encodeURIComponent(member.email)}`
+      );
+
+      const users = response.data || [];
+      // Use first result whose email exactly matches (case-insensitive)
+      const exactMatch = users.find(
+        (u) => (u.emailAddress || '').toLowerCase() === member.email.toLowerCase()
+      ) || users[0];
+
+      if (exactMatch) {
+        await memberRepository.updateJiraAccountId(member.id, exactMatch.accountId, 'auto');
+        results.matched.push({
+          memberId:        member.id,
+          name:            member.name,
+          email:           member.email,
+          jiraAccountId:   exactMatch.accountId,
+          jiraDisplayName: exactMatch.displayName,
+        });
+      } else {
+        results.notFound.push({
+          memberId: member.id,
+          name:     member.name,
+          email:    member.email,
+          reason:   'No Jira user found with this email',
+        });
+      }
+    } catch (err) {
+      const reason = err.response?.data?.errorMessages?.[0] || err.message;
+      results.notFound.push({
+        memberId: member.id,
+        name:     member.name,
+        email:    member.email,
+        reason,
+      });
+    }
+
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  return results;
+}
+
 module.exports = {
   getSprintIssues, addComment, transitionIssue, getOverdueIssues, testConnection,
   // Write APIs
   getJiraBoardId, getMemberJiraAccountId, createSprint, startSprint, createIssue, createIssuesBatch,
+  // Team sync
+  fetchAndStoreJiraAccountIds,
 };

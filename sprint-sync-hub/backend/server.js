@@ -34,6 +34,7 @@ app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
 app.use('/api/assignment',     require('./routes/assignment'));
 app.use('/api/mismatch',      require('./routes/mismatch'));
 app.use('/api/roles',         require('./routes/roles'));
+app.use('/api/members',       require('./routes/members'));
 
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();
@@ -96,7 +97,7 @@ async function boot() {
   // 6. Pre-sync team members from config into DB
   for (const m of cfg.teamMembers) {
     try {
-      await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null, m.role || null);
+      await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null);
     } catch (_) { /* non-fatal */ }
   }
 
@@ -116,7 +117,30 @@ async function boot() {
     if (dmMembers.length > 0) {
       console.log(`DM-enabled members: ${dmMembers.map((m) => m.name).join(', ')}`);
     }
-  } catch (_) { /* non-fatal — roles table may not exist yet on very first boot */ }
+  } catch (_) { /* non-fatal */ }
+
+  // 6d. First-startup auto-sync: fetch Slack emails + Jira IDs if no member has either
+  try {
+    const allMembers = await memberRepo.findAll(orgId);
+    const noEmailCount = allMembers.filter((m) => !m.email).length;
+    if (allMembers.length > 0 && noEmailCount === allMembers.length) {
+      console.log('First startup detected — auto-fetching Slack emails and Jira account IDs...');
+      const slackSvc = require('./services/slackService');
+      const jiraSvc  = require('./services/jiraService');
+      try {
+        const emailResult = await slackSvc.fetchAndStoreSlackEmails(orgId);
+        console.log(`  Emails: ${emailResult.fetched.length} fetched, ${emailResult.failed.length} failed`);
+      } catch (e) {
+        console.warn('  Slack email fetch failed (non-fatal):', e.message);
+      }
+      try {
+        const jiraResult = await jiraSvc.fetchAndStoreJiraAccountIds(orgId);
+        console.log(`  Jira IDs: ${jiraResult.matched.length} matched, ${jiraResult.notFound.length} not found`);
+      } catch (e) {
+        console.warn('  Jira ID fetch failed (non-fatal):', e.message);
+      }
+    }
+  } catch (_) { /* non-fatal */ }
 
   // 7. Start Express
   app.listen(PORT, () => {

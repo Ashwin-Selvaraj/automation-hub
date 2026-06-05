@@ -32,14 +32,24 @@ export const generateReport = (weekIndex = 0) => request('/api/report/generate',
 export const postReport = (report) => request('/api/report/post', { method: 'POST', body: JSON.stringify({ report }) });
 
 // Roles
-export const getRoles      = (type) => request(`/api/roles${type ? `?type=${type}` : ''}`);
-export const createRole    = (body) => request('/api/roles', { method: 'POST', body: JSON.stringify(body) });
-export const updateRole    = (roleId, body) => request(`/api/roles/${roleId}`, { method: 'PATCH', body: JSON.stringify(body) });
-export const deleteRole    = (roleId) => request(`/api/roles/${roleId}`, { method: 'DELETE' });
+export const getRoles       = (type) => request(`/api/roles${type ? `?type=${type}` : ''}`);
+export const createRole     = (body) => request('/api/roles', { method: 'POST', body: JSON.stringify(body) });
+export const updateRole     = (roleId, body) => request(`/api/roles/${roleId}`, { method: 'PATCH', body: JSON.stringify(body) });
+export const deleteRole     = (roleId) => request(`/api/roles/${roleId}`, { method: 'DELETE' });
 export const getRoleMembers = (roleId) => request(`/api/roles/${roleId}/members`);
 
 // Member roles
-export const getMemberRoles    = (memberId) => request(`/api/roles/members/${memberId}/roles`);
-export const setMemberRoles    = (memberId, roleIds, updatedBy) => request(`/api/roles/members/${memberId}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds, updatedBy }) });
-export const addMemberRole     = (memberId, roleId) => request(`/api/roles/members/${memberId}/roles/${roleId}`, { method: 'POST', body: JSON.stringify({}) });
-export const removeMemberRole  = (memberId, roleId) => request(`/api/roles/members/${memberId}/roles/${roleId}`, { method: 'DELETE', body: JSON.stringify({}) });
+export const getMemberRoles   = (memberId) => request(`/api/roles/members/${memberId}/roles`);
+export const updateMemberRoles = (memberId, roleIds) => request(`/api/roles/members/${memberId}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds }) });
+export const setMemberRoles   = updateMemberRoles; // alias kept for backward compat
+export const addMemberRole    = (memberId, roleId) => request(`/api/roles/members/${memberId}/roles/${roleId}`, { method: 'POST', body: JSON.stringify({}) });
+export const removeMemberRole = (memberId, roleId) => request(`/api/roles/members/${memberId}/roles/${roleId}`, { method: 'DELETE', body: JSON.stringify({}) });
+
+// Members (full data: roles + email + jira ID)
+export const getMembers        = ()                            => request('/api/members');
+export const getMember         = (memberId)                    => request(`/api/members/${memberId}`);
+export const getJiraIdStatus   = ()                            => request('/api/members/jira-id-status');
+export const setMemberJiraId   = (memberId, jiraAccountId)     => request(`/api/members/${memberId}/jira-id`, { method: 'PATCH', body: JSON.stringify({ jiraAccountId }) });
+export const fetchSlackEmails  = ()                            => request('/api/members/fetch-slack-emails', { method: 'POST', body: JSON.stringify({}) });
+export const fetchJiraIds      = ()                            => request('/api/members/fetch-jira-ids',     { method: 'POST', body: JSON.stringify({}) });
+export const syncAll           = ()                            => request('/api/members/sync-all',           { method: 'POST', body: JSON.stringify({}) });

@@ -107,7 +107,7 @@ Schema for each task:
       const techRoles = roleData
         ? roleData.roles.filter((r) => r.role_type === 'technical').map((r) => r.name)
         : [];
-      const roleLabel = techRoles.length > 0 ? techRoles.join(', ') : (m.role || 'Engineer');
+      const roleLabel = techRoles.length > 0 ? techRoles.join(', ') : 'Engineer';
       return `- ${m.name}: ${roleLabel} (currently has ${m.currentTaskCount} tasks)`;
     })
     .join('\n');

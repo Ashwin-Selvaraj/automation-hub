@@ -116,9 +116,11 @@ router.get('/members/:memberId/roles', async (req, res) => {
 router.put('/members/:memberId/roles', async (req, res) => {
   try {
     const { memberId } = req.params;
-    const { roleIds, updatedBy } = req.body;
+    const { updatedBy } = req.body;
+    // Parse roleIds as integers — JSON may deliver them as strings or numbers
+    const roleIds = (req.body.roleIds || []).map((id) => parseInt(id, 10)).filter((id) => !isNaN(id));
 
-    if (!Array.isArray(roleIds)) return res.status(400).json({ error: 'roleIds must be an array' });
+    if (!Array.isArray(req.body.roleIds)) return res.status(400).json({ error: 'roleIds must be an array' });
 
     const member = await memberRepository.findById(memberId);
     if (!member) return res.status(404).json({ error: 'Member not found' });
@@ -139,7 +141,12 @@ router.put('/members/:memberId/roles', async (req, res) => {
       success:  true,
     });
 
-    res.json({ ...result, member: memberWithRoles, warning });
+    res.json({
+      success:  true,
+      changes:  { added: result.added, removed: result.removed, unchanged: result.unchanged },
+      member:   memberWithRoles,
+      warning,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
