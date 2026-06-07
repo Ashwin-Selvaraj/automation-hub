@@ -91,6 +91,7 @@ router.get('/status/today', async (req, res) => {
           memberId:       m.id,
           name:           m.name,
           slackUserId:    m.slack_user_id,
+          hasEmail:       !!m.email,
           checkedIn,
           checkInTime,
           checkedOut,
@@ -110,7 +111,8 @@ router.get('/status/today', async (req, res) => {
       postedStandup:           memberRows.filter((r) => r.postedStandup).length,
       checkoutWithoutStandup:  memberRows.filter((r) => r.status === 'checked_out_no_standup').length,
       stillIn:                 memberRows.filter((r) => r.status === 'still_in').length,
-      noEmail:                 memberRows.filter((r) => !r.checkedIn && !r.checkedOut && !r.postedStandup).length,
+      noEmail:                 memberRows.filter((r) => !r.hasEmail).length,
+      zohoUnavailable:         !zohoService.isConfigured() || attendanceRecords.length === 0,
     };
 
     res.json({

@@ -17,6 +17,12 @@
  */
 
 const axios = require('axios');
+const fs    = require('fs');
+const path  = require('path');
+
+// File used to persist the token across server restarts — avoids hitting
+// the token endpoint on every cold start and triggering Zoho rate limits.
+const TOKEN_CACHE_FILE = path.join(__dirname, '..', '.zoho_token_cache.json');
 
 // ─── Structured logger ────────────────────────────────────────────────────────
 
@@ -56,63 +62,118 @@ function isConfigured() {
   return !!(c.clientId && c.clientSecret && c.refreshToken);
 }
 
-// ─── Token cache ──────────────────────────────────────────────────────────────
+// ─── Token cache (in-memory + file-backed) ───────────────────────────────────
 
-let cachedToken   = null;
-let tokenExpiresAt = null;
+let _token         = null;
+let _tokenExpiry   = 0;
+let _refreshPromise = null; // mutex: prevents concurrent refresh calls
 
 /**
- * Returns a valid OAuth access token, refreshing via the refresh_token grant if expired.
- * Token is cached for (expires_in - 5 minutes) to avoid redundant refreshes.
+ * Load a previously persisted token from disk (survives server restarts).
+ * Only called once at startup.
+ */
+function loadCachedTokenFromDisk() {
+  try {
+    if (fs.existsSync(TOKEN_CACHE_FILE)) {
+      const { token, expiresAt } = JSON.parse(fs.readFileSync(TOKEN_CACHE_FILE, 'utf8'));
+      if (token && expiresAt && Date.now() < expiresAt - 300_000) {
+        _token       = token;
+        _tokenExpiry = expiresAt;
+        zohoLog('INFO', 'Token loaded from disk cache', { expiresAt: new Date(expiresAt).toISOString() });
+      }
+    }
+  } catch (_) { /* non-fatal — will refresh from Zoho */ }
+}
+
+function saveTokenToDisk(token, expiresAt) {
+  try {
+    fs.writeFileSync(TOKEN_CACHE_FILE, JSON.stringify({ token, expiresAt }), 'utf8');
+  } catch (err) {
+    zohoLog('WARN', 'Could not persist token to disk', { error: err.message });
+  }
+}
+
+// Load disk cache immediately on module load
+loadCachedTokenFromDisk();
+
+/**
+ * Returns a valid OAuth access token.
+ *
+ * - Uses in-memory cache first (fastest path)
+ * - Falls back to disk cache (survives server restarts, avoids rate limits)
+ * - Only calls Zoho token endpoint when both caches are empty or expired
+ * - Mutex prevents concurrent refresh calls (important for batch attendance fetches)
  */
 async function getAccessToken() {
-  // Return cached token if still valid with a 5-minute safety buffer
-  if (cachedToken && tokenExpiresAt && Date.now() < tokenExpiresAt - 300_000) {
-    return cachedToken;
-  }
+  // In-memory cache hit
+  if (_token && Date.now() < _tokenExpiry - 300_000) return _token;
+
+  // If a refresh is already in progress, wait for it — don't make a second call
+  if (_refreshPromise) return _refreshPromise;
 
   const c = getConfig();
   if (!c.clientId || !c.clientSecret || !c.refreshToken) {
     throw new Error('Zoho credentials missing — check ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN in .env');
   }
 
-  try {
-    // Zoho requires params as query string on the POST URL (not in request body)
-    const response = await axios.post(
-      `https://${c.accountsHost}/oauth/v2/token`,
-      null,
-      {
-        params: {
-          grant_type:    'refresh_token',
-          client_id:     c.clientId,
-          client_secret: c.clientSecret,
-          refresh_token: c.refreshToken,
-        },
-        timeout: 12_000,
+  _refreshPromise = (async () => {
+    try {
+      zohoLog('INFO', 'Refreshing Zoho access token');
+      const response = await axios.post(
+        `https://${c.accountsHost}/oauth/v2/token`,
+        null,
+        {
+          params: {
+            grant_type:    'refresh_token',
+            client_id:     c.clientId,
+            client_secret: c.clientSecret,
+            refresh_token: c.refreshToken,
+          },
+          timeout: 12_000,
+        }
+      );
+
+      if (!response.data.access_token) {
+        throw new Error(`Token response missing access_token: ${JSON.stringify(response.data)}`);
       }
-    );
 
-    if (!response.data.access_token) {
-      throw new Error(`Token response missing access_token: ${JSON.stringify(response.data)}`);
+      _token       = response.data.access_token;
+      _tokenExpiry = Date.now() + parseInt(response.data.expires_in || '3600', 10) * 1_000;
+
+      saveTokenToDisk(_token, _tokenExpiry);
+      zohoLog('INFO', 'Token refreshed and cached', {
+        expiresIn:   response.data.expires_in,
+        tokenPrefix: _token.substring(0, 15),
+      });
+
+      return _token;
+    } catch (err) {
+      const isRateLimit = err.response?.data?.error === 'Access Denied' ||
+        String(err.response?.data?.error_description || '').includes('too many requests');
+
+      if (isRateLimit) {
+        // Don't wipe the in-memory token if we're just rate-limited — the old
+        // token may still be valid for another hour. Only clear if truly expired.
+        if (_token && Date.now() < _tokenExpiry) {
+          zohoLog('WARN', 'Rate limited by Zoho token endpoint — reusing existing token', {
+            tokenValidUntil: new Date(_tokenExpiry).toISOString(),
+          });
+          return _token;
+        }
+        zohoLog('ERROR', 'Rate limited and no valid cached token available', {
+          hint: 'Wait ~10 minutes before retrying, or restart after the rate limit clears',
+        });
+      }
+
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      zohoLog('ERROR', 'Token refresh failed', { detail });
+      throw new Error(`Zoho token refresh failed: ${detail}`);
+    } finally {
+      _refreshPromise = null; // release mutex
     }
+  })();
 
-    cachedToken    = response.data.access_token;
-    tokenExpiresAt = Date.now() + (parseInt(response.data.expires_in || '3600', 10)) * 1_000;
-
-    zohoLog('INFO', 'Token refreshed', {
-      expiresIn:   response.data.expires_in,
-      tokenPrefix: cachedToken.substring(0, 15),
-    });
-
-    return cachedToken;
-  } catch (err) {
-    // Invalidate cache on failure
-    cachedToken    = null;
-    tokenExpiresAt = null;
-    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    zohoLog('ERROR', 'Token refresh failed', { detail });
-    throw new Error(`Zoho token refresh failed: ${detail}`);
-  }
+  return _refreshPromise;
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
