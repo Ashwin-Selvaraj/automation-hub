@@ -5,8 +5,12 @@
  *
  * Required env vars (or DB config keys):
  *   ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN
- *   ZOHO_ORG_ID      — numeric Zoho org ID (optional, needed for some endpoints)
- *   ZOHO_DOMAIN      — one of: zoho.in | zoho.com | zoho.eu  (default: zoho.in)
+ *   ZOHO_ORG_IDENTIFIER — company slug used in People API URLs (e.g. "marmafintech")
+ *   ZOHO_DOMAIN         — one of: zoho.in | zoho.com | zoho.eu  (default: zoho.in)
+ *
+ * OAuth token endpoint:  https://accounts.{ZOHO_DOMAIN}/oauth/v2/token
+ * People API endpoint:   https://www.zohoapis.{tld}/people/api/...
+ *   where tld is extracted from ZOHO_DOMAIN (e.g. zoho.in → .in, zoho.com → .com)
  *
  * All API functions return null / empty array if Zoho is not configured, so the
  * rest of the app degrades gracefully when the integration is disabled.
@@ -21,12 +25,21 @@ let _tokenExpiry     = 0;   // unix ms
 // ─── Config helpers ───────────────────────────────────────────────────────────
 
 function getConfig() {
+  const domain = process.env.ZOHO_DOMAIN || 'zoho.in';
+  // Derive the zohoapis hostname from the domain.
+  // zoho.in  → www.zohoapis.in
+  // zoho.com → www.zohoapis.com
+  // zoho.eu  → www.zohoapis.eu
+  const tld        = domain.includes('.') ? domain.substring(domain.indexOf('.')) : '.in'; // e.g. ".in"
+  const apiHost    = `www.zohoapis${tld}`;
+
   return {
-    clientId:     process.env.ZOHO_CLIENT_ID     || '',
-    clientSecret: process.env.ZOHO_CLIENT_SECRET || '',
-    refreshToken: process.env.ZOHO_REFRESH_TOKEN || '',
-    orgId:        process.env.ZOHO_ORG_ID        || '',
-    domain:       process.env.ZOHO_DOMAIN        || 'zoho.in',
+    clientId:      process.env.ZOHO_CLIENT_ID      || '',
+    clientSecret:  process.env.ZOHO_CLIENT_SECRET  || '',
+    refreshToken:  process.env.ZOHO_REFRESH_TOKEN  || '',
+    orgIdentifier: process.env.ZOHO_ORG_IDENTIFIER || '',
+    domain,
+    apiHost,  // e.g. "www.zohoapis.in"
   };
 }
 
@@ -122,7 +135,8 @@ async function getAccessToken() {
 async function zohoGet(path) {
   const token = await getAccessToken();
   const c = getConfig();
-  return httpsGet(`people.${c.domain}`, path, token);
+  // Use www.zohoapis.{tld} as the API host (India: www.zohoapis.in)
+  return httpsGet(c.apiHost, path, token);
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
