@@ -1,45 +1,53 @@
 'use strict';
 
 /**
- * Zoho People service — OAuth 2.0 token management + attendance/leave API.
+ * zohoService.js — Zoho People attendance and leave integration.
  *
- * Required env vars (or DB config keys):
+ * Required env vars:
  *   ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN
- *   ZOHO_ORG_IDENTIFIER — company slug used in People API URLs (e.g. "marmafintech")
- *   ZOHO_DOMAIN         — one of: zoho.in | zoho.com | zoho.eu  (default: zoho.in)
+ *   ZOHO_ORG_IDENTIFIER — company slug (e.g. "marmafintech"), NOT a numeric ID
+ *   ZOHO_DOMAIN         — zoho.in | zoho.com | zoho.eu  (default: zoho.in)
  *
- * OAuth token endpoint:  https://accounts.{ZOHO_DOMAIN}/oauth/v2/token
- * People API endpoint:   https://www.zohoapis.{tld}/people/api/...
- *   where tld is extracted from ZOHO_DOMAIN (e.g. zoho.in → .in, zoho.com → .com)
+ * OAuth token:  https://accounts.{ZOHO_DOMAIN}/oauth/v2/token
+ * People API:   https://www.zohoapis.{tld}/people/api/...
+ *               e.g. https://www.zohoapis.in/people/api/attendance/getAttendance
  *
- * All API functions return null / empty array if Zoho is not configured, so the
- * rest of the app degrades gracefully when the integration is disabled.
+ * All public functions return null / empty array if Zoho is not configured,
+ * so the rest of the app degrades gracefully when the integration is disabled.
  */
 
-const https = require('https');
+const axios = require('axios');
 
-// ─── Token cache ──────────────────────────────────────────────────────────────
-let _accessToken     = null;
-let _tokenExpiry     = 0;   // unix ms
+// ─── Structured logger ────────────────────────────────────────────────────────
 
-// ─── Config helpers ───────────────────────────────────────────────────────────
+function zohoLog(level, message, data) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    service:   'ZohoService',
+    level,
+    message,
+    ...(data || {}),
+  };
+  if (level === 'ERROR') console.error(JSON.stringify(entry));
+  else if (level === 'WARN') console.warn(JSON.stringify(entry));
+  else console.log(JSON.stringify(entry));
+}
+
+// ─── Config ───────────────────────────────────────────────────────────────────
 
 function getConfig() {
   const domain = process.env.ZOHO_DOMAIN || 'zoho.in';
-  // Derive the zohoapis hostname from the domain.
-  // zoho.in  → www.zohoapis.in
-  // zoho.com → www.zohoapis.com
-  // zoho.eu  → www.zohoapis.eu
-  const tld        = domain.includes('.') ? domain.substring(domain.indexOf('.')) : '.in'; // e.g. ".in"
-  const apiHost    = `www.zohoapis${tld}`;
-
+  const tld    = domain.includes('.') ? domain.substring(domain.indexOf('.')) : '.in';
   return {
     clientId:      process.env.ZOHO_CLIENT_ID      || '',
     clientSecret:  process.env.ZOHO_CLIENT_SECRET  || '',
     refreshToken:  process.env.ZOHO_REFRESH_TOKEN  || '',
     orgIdentifier: process.env.ZOHO_ORG_IDENTIFIER || '',
     domain,
-    apiHost,  // e.g. "www.zohoapis.in"
+    tld,
+    accountsHost: `accounts.${domain}`,          // e.g. accounts.zoho.in
+    apiHost:      `www.zohoapis${tld}`,           // e.g. www.zohoapis.in
+    peopleHost:   `people.${domain}`,             // e.g. people.zoho.in (fallback)
   };
 }
 
@@ -48,106 +56,82 @@ function isConfigured() {
   return !!(c.clientId && c.clientSecret && c.refreshToken);
 }
 
-// ─── HTTP helper ──────────────────────────────────────────────────────────────
+// ─── Token cache ──────────────────────────────────────────────────────────────
 
-function httpsPost(hostname, path, body) {
-  return new Promise((resolve, reject) => {
-    const postData = typeof body === 'string' ? body : new URLSearchParams(body).toString();
-    const options = {
-      hostname,
-      path,
-      method: 'POST',
-      headers: {
-        'Content-Type':  'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(postData),
-      },
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch { resolve({ raw: data }); }
-      });
-    });
-    req.on('error', reject);
-    req.write(postData);
-    req.end();
-  });
-}
-
-function httpsGet(hostname, path, token) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname,
-      path,
-      method: 'GET',
-      headers: { Authorization: `Zoho-oauthtoken ${token}` },
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch { resolve({ raw: data }); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-// ─── OAuth ────────────────────────────────────────────────────────────────────
+let cachedToken   = null;
+let tokenExpiresAt = null;
 
 /**
- * Returns a valid access token, refreshing if expired.
- * Tokens last 1 hour; we refresh 2 minutes early.
+ * Returns a valid OAuth access token, refreshing via the refresh_token grant if expired.
+ * Token is cached for (expires_in - 5 minutes) to avoid redundant refreshes.
  */
 async function getAccessToken() {
-  if (_accessToken && Date.now() < _tokenExpiry) return _accessToken;
-
-  const c = getConfig();
-  if (!isConfigured()) throw new Error('Zoho not configured — set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN');
-
-  const result = await httpsPost(
-    `accounts.${c.domain}`,
-    '/oauth/v2/token',
-    {
-      grant_type:    'refresh_token',
-      client_id:     c.clientId,
-      client_secret: c.clientSecret,
-      refresh_token: c.refreshToken,
-    }
-  );
-
-  if (!result.access_token) {
-    throw new Error(`Zoho token refresh failed: ${JSON.stringify(result)}`);
+  // Return cached token if still valid with a 5-minute safety buffer
+  if (cachedToken && tokenExpiresAt && Date.now() < tokenExpiresAt - 300_000) {
+    return cachedToken;
   }
 
-  _accessToken = result.access_token;
-  _tokenExpiry = Date.now() + (parseInt(result.expires_in || '3600', 10) - 120) * 1000;
-  console.log('[zohoService] Access token refreshed');
-  return _accessToken;
-}
-
-// ─── API wrapper ──────────────────────────────────────────────────────────────
-
-async function zohoGet(path) {
-  const token = await getAccessToken();
   const c = getConfig();
-  // Use www.zohoapis.{tld} as the API host (India: www.zohoapis.in)
-  return httpsGet(c.apiHost, path, token);
+  if (!c.clientId || !c.clientSecret || !c.refreshToken) {
+    throw new Error('Zoho credentials missing — check ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN in .env');
+  }
+
+  try {
+    // Zoho requires params as query string on the POST URL (not in request body)
+    const response = await axios.post(
+      `https://${c.accountsHost}/oauth/v2/token`,
+      null,
+      {
+        params: {
+          grant_type:    'refresh_token',
+          client_id:     c.clientId,
+          client_secret: c.clientSecret,
+          refresh_token: c.refreshToken,
+        },
+        timeout: 12_000,
+      }
+    );
+
+    if (!response.data.access_token) {
+      throw new Error(`Token response missing access_token: ${JSON.stringify(response.data)}`);
+    }
+
+    cachedToken    = response.data.access_token;
+    tokenExpiresAt = Date.now() + (parseInt(response.data.expires_in || '3600', 10)) * 1_000;
+
+    zohoLog('INFO', 'Token refreshed', {
+      expiresIn:   response.data.expires_in,
+      tokenPrefix: cachedToken.substring(0, 15),
+    });
+
+    return cachedToken;
+  } catch (err) {
+    // Invalidate cache on failure
+    cachedToken    = null;
+    tokenExpiresAt = null;
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    zohoLog('ERROR', 'Token refresh failed', { detail });
+    throw new Error(`Zoho token refresh failed: ${detail}`);
+  }
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
+function getTodayDateString() {
+  // Uses local time (not UTC) so the date matches what Zoho records
+  const now = new Date();
+  const y   = now.getFullYear();
+  const m   = String(now.getMonth() + 1).padStart(2, '0');
+  const d   = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function toDateStr(d) {
-  if (!d) return new Date().toISOString().split('T')[0];
+  if (!d) return getTodayDateString();
   if (typeof d === 'string') return d.substring(0, 10);
   return d.toISOString().split('T')[0];
 }
 
-/** Parse HH:MM time string to minutes since midnight */
 function timeToMinutes(timeStr) {
   if (!timeStr) return null;
   const parts = String(timeStr).split(':');
@@ -155,101 +139,416 @@ function timeToMinutes(timeStr) {
   return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Response parsing ─────────────────────────────────────────────────────────
 
 /**
- * Get a single member's attendance for a given date.
- * @returns {{ checkedIn: boolean, checkInTime: string|null, checkOutTime: string|null, hoursWorked: number|null, status: string }}
+ * Extract standardised attendance fields from a single Zoho record.
+ * Handles all field-name variations Zoho uses across API versions.
  */
-async function getAttendance(employeeEmail, date) {
-  if (!isConfigured()) return null;
-  const dateStr = toDateStr(date);
-  try {
-    const data = await zohoGet(
-      `/people/api/attendance/getAttendance?empId=${encodeURIComponent(employeeEmail)}&startDate=${dateStr}&endDate=${dateStr}`
-    );
-    const record = data?.response?.result?.[0] || data?.result?.[0] || null;
-    if (!record) return { checkedIn: false, checkInTime: null, checkOutTime: null, hoursWorked: null, status: 'Absent' };
+function extractAttendanceFields(record) {
+  const checkIn = record.checkIn   || record.CheckIn   || record.check_in
+    || record.attendanceCheckIn    || record.checkinTime || null;
+  const checkOut = record.checkOut  || record.CheckOut  || record.check_out
+    || record.attendanceCheckOut   || record.checkoutTime || null;
+  const hours = record.hoursWorked || record.hours_worked || record.totalHours
+    || record.workHours || null;
+  const status = record.attendanceStatus || record.status || record.Status
+    || (checkIn ? 'Present' : 'Absent');
 
-    const checkIn  = record.checkIn  || record.Check_In  || null;
-    const checkOut = record.checkOut || record.Check_Out || null;
-    const hours    = record.hoursWorked || record.Hours_Worked || null;
-    const status   = record.status   || record.Status    || (checkIn ? 'Present' : 'Absent');
-
-    return {
-      checkedIn:    !!checkIn,
-      checkInTime:  checkIn  ? String(checkIn).substring(0, 5)  : null,
-      checkOutTime: checkOut ? String(checkOut).substring(0, 5) : null,
-      hoursWorked:  hours    ? parseFloat(hours) : null,
-      status:       String(status),
-    };
-  } catch (err) {
-    console.warn('[zohoService.getAttendance]', err.message);
-    return null;
-  }
+  return {
+    checkedIn:    !!checkIn,
+    checkInTime:  checkIn  ? String(checkIn).substring(0, 5)  : null,
+    checkedOut:   !!checkOut,
+    checkOutTime: checkOut ? String(checkOut).substring(0, 5) : null,
+    hoursWorked:  hours ? parseFloat(hours) : null,
+    status:       String(status),
+  };
 }
 
 /**
- * Check if a member is on approved leave for a given date.
- * @returns {{ onLeave: boolean, leaveType: string|null, reason: string|null }}
+ * Parse a Zoho People API response into a consistent attendance object.
+ * Returns null if the shape is unrecognised (caller should try next endpoint).
  */
+function parseAttendanceResponse(data, contextLabel) {
+  if (!data) return null;
+
+  // Shape 1: { response: { result: [ {...} ] } }
+  if (data?.response?.result) {
+    const records = Array.isArray(data.response.result)
+      ? data.response.result
+      : [data.response.result];
+    if (records.length > 0) return extractAttendanceFields(records[0]);
+    // result is an empty array → no attendance record for this date
+    return {
+      checkedIn: false, checkInTime: null, checkedOut: false,
+      checkOutTime: null, hoursWorked: null, status: 'No Record',
+    };
+  }
+
+  // Shape 2: Direct array [ {...} ]
+  if (Array.isArray(data)) {
+    if (data.length > 0) return extractAttendanceFields(data[0]);
+    return {
+      checkedIn: false, checkInTime: null, checkedOut: false,
+      checkOutTime: null, hoursWorked: null, status: 'No Record',
+    };
+  }
+
+  // Shape 3: { data: [ {...} ] }
+  if (data?.data && Array.isArray(data.data)) {
+    if (data.data.length > 0) return extractAttendanceFields(data.data[0]);
+    return {
+      checkedIn: false, checkInTime: null, checkedOut: false,
+      checkOutTime: null, hoursWorked: null, status: 'No Record',
+    };
+  }
+
+  // Shape 4: Top-level record object
+  if (data?.checkIn || data?.CheckIn || data?.check_in || data?.attendanceCheckIn) {
+    return extractAttendanceFields(data);
+  }
+
+  // Shape 5: Error response from Zoho
+  if (data?.response?.errors || data?.errors) {
+    const errDetail = JSON.stringify(data?.response?.errors || data?.errors);
+    zohoLog('WARN', 'Zoho API returned error shape', { context: contextLabel, errors: errDetail });
+    return {
+      checkedIn: false, checkInTime: null, checkedOut: false,
+      checkOutTime: null, hoursWorked: null, status: 'API Error',
+    };
+  }
+
+  // Unrecognised — log so we can fix the parser
+  zohoLog('WARN', 'Unrecognised Zoho response shape', {
+    context: contextLabel,
+    sample:  JSON.stringify(data).substring(0, 300),
+  });
+  return null;
+}
+
+// ─── Core API function ────────────────────────────────────────────────────────
+
+/**
+ * Fetch today's attendance for a single employee.
+ * Tries multiple endpoint variants until one succeeds.
+ * Never throws — returns a safe default on any failure.
+ */
+async function getTodayAttendance(employeeEmail) {
+  const defaultResult = {
+    checkedIn: false, checkInTime: null,
+    checkedOut: false, checkOutTime: null,
+    hoursWorked: null, status: 'No Record',
+  };
+
+  if (!employeeEmail) {
+    zohoLog('WARN', 'getTodayAttendance called with no email');
+    return defaultResult;
+  }
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    zohoLog('ERROR', 'getTodayAttendance: token refresh failed', { email: employeeEmail, error: err.message });
+    return defaultResult;
+  }
+
+  const c     = getConfig();
+  const today = getTodayDateString();
+
+  const endpoints = [
+    // Primary: zohoapis.in (the account's stated API domain)
+    {
+      label:  'zohoapis',
+      url:    `https://${c.apiHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: today, endDate: today, dateFormat: 'yyyy-MM-dd' },
+    },
+    // Fallback 1: people.zoho.in with dateFormat
+    {
+      label:  'people-with-fmt',
+      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: today, endDate: today, dateFormat: 'yyyy-MM-dd' },
+    },
+    // Fallback 2: people.zoho.in without dateFormat
+    {
+      label:  'people-no-fmt',
+      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: today, endDate: today },
+    },
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const response = await axios.get(ep.url, {
+        headers: {
+          Authorization:  `Zoho-oauthtoken ${token}`,
+          'Content-Type': 'application/json',
+        },
+        params:  ep.params,
+        timeout: 10_000,
+      });
+
+      const parsed = parseAttendanceResponse(response.data, `${ep.label}:${employeeEmail}`);
+      if (parsed !== null) {
+        zohoLog('INFO', 'Attendance fetched', {
+          endpoint:  ep.label,
+          email:     employeeEmail,
+          checkedIn: parsed.checkedIn,
+          status:    parsed.status,
+        });
+        return parsed;
+      }
+      // parsed null = shape unrecognised, try next endpoint
+
+    } catch (err) {
+      const status = err.response?.status;
+      const detail = JSON.stringify(err.response?.data || err.message);
+      zohoLog('WARN', 'Endpoint failed', { endpoint: ep.label, email: employeeEmail, status, detail: detail.substring(0, 200) });
+
+      if (status === 401) {
+        // Token expired — invalidate cache and try to refresh once
+        cachedToken = null;
+        try { token = await getAccessToken(); } catch (_) {}
+      }
+      if (status === 403) {
+        zohoLog('ERROR', '403 Forbidden — check API scopes in Zoho developer console', { email: employeeEmail });
+        return defaultResult; // No point trying more endpoints
+      }
+    }
+  }
+
+  zohoLog('WARN', 'All attendance endpoints failed', { email: employeeEmail, date: today });
+  return defaultResult;
+}
+
+/**
+ * Get today's attendance for ALL active team members.
+ * Reads members from the database (preferred) so emails are always current.
+ * Processes 3 members in parallel with 300 ms gaps between batches.
+ */
+async function getAllTodayAttendance() {
+  if (!isConfigured()) {
+    zohoLog('WARN', 'getAllTodayAttendance skipped — Zoho not configured');
+    return [];
+  }
+
+  // Read members from DB — this has emails; TEAM_MEMBERS env var does NOT
+  let teamMembers = [];
+  try {
+    const { query } = require('../db');
+    const result = await query(
+      `SELECT id, name, email, slack_user_id
+       FROM members
+       WHERE is_active = true
+       ORDER BY name`
+    );
+    teamMembers = result.rows;
+    zohoLog('INFO', 'Loading attendance for members from DB', { count: teamMembers.length });
+  } catch (dbErr) {
+    zohoLog('ERROR', 'Cannot read members from DB', { error: dbErr.message });
+    return [];
+  }
+
+  if (teamMembers.length === 0) {
+    zohoLog('WARN', 'No active members found in DB');
+    return [];
+  }
+
+  const results    = [];
+  const BATCH_SIZE = 3;
+
+  for (let i = 0; i < teamMembers.length; i += BATCH_SIZE) {
+    const batch       = teamMembers.slice(i, i + BATCH_SIZE);
+    const batchResult = await Promise.all(
+      batch.map(async (member) => {
+        if (!member.email) {
+          zohoLog('WARN', 'Member has no email — skipping attendance lookup', { name: member.name });
+          return {
+            memberId:     member.id,
+            name:         member.name,
+            email:        null,
+            slackUserId:  member.slack_user_id,
+            checkedIn:    false,
+            checkInTime:  null,
+            checkedOut:   false,
+            checkOutTime: null,
+            hoursWorked:  null,
+            status:       'No Email',
+          };
+        }
+
+        const att = await getTodayAttendance(member.email);
+        return {
+          memberId:     member.id,
+          name:         member.name,
+          email:        member.email,
+          slackUserId:  member.slack_user_id,
+          ...att,
+        };
+      })
+    );
+    results.push(...batchResult);
+
+    // Pause between batches to respect Zoho rate limits
+    if (i + BATCH_SIZE < teamMembers.length) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  const checkedInCount = results.filter((m) => m.checkedIn).length;
+  zohoLog('INFO', 'Team attendance loaded', {
+    total:      results.length,
+    checkedIn:  checkedInCount,
+    noEmail:    results.filter((m) => m.status === 'No Email').length,
+  });
+
+  return results;
+}
+
+// ─── Single-date attendance ───────────────────────────────────────────────────
+
+async function getAttendance(employeeEmail, date) {
+  if (!isConfigured()) return null;
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    zohoLog('ERROR', 'getAttendance: token refresh failed', { email: employeeEmail, error: err.message });
+    return null;
+  }
+
+  const c       = getConfig();
+  const dateStr = toDateStr(date);
+
+  const endpoints = [
+    {
+      label:  'zohoapis',
+      url:    `https://${c.apiHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: dateStr, endDate: dateStr, dateFormat: 'yyyy-MM-dd' },
+    },
+    {
+      label:  'people',
+      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: dateStr, endDate: dateStr },
+    },
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const response = await axios.get(ep.url, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        params:  ep.params,
+        timeout: 10_000,
+      });
+      const parsed = parseAttendanceResponse(response.data, `getAttendance:${ep.label}:${employeeEmail}`);
+      if (parsed !== null) return parsed;
+    } catch (err) {
+      zohoLog('WARN', 'getAttendance endpoint failed', {
+        endpoint: ep.label,
+        email:    employeeEmail,
+        status:   err.response?.status,
+        error:    String(err.response?.data || err.message).substring(0, 200),
+      });
+      if (err.response?.status === 403) return null;
+    }
+  }
+
+  return { checkedIn: false, checkInTime: null, checkOutTime: null, hoursWorked: null, status: 'No Record' };
+}
+
+// ─── Leave check ──────────────────────────────────────────────────────────────
+
 async function isOnLeave(employeeEmail, date) {
   if (!isConfigured()) return { onLeave: false, leaveType: null, reason: null };
   const dateStr = toDateStr(date);
+
+  let token;
   try {
-    const data = await zohoGet(
-      `/people/api/leave/getLeavesByUser?empId=${encodeURIComponent(employeeEmail)}&startDate=${dateStr}&endDate=${dateStr}&status=approved`
-    );
-
-    // Normalise across API response shapes
-    const records = data?.response?.result || data?.result || [];
-    if (!Array.isArray(records) || records.length === 0) {
-      return { onLeave: false, leaveType: null, reason: null };
-    }
-
-    const leave = records[0];
-    return {
-      onLeave:   true,
-      leaveType: leave.leaveType  || leave.Leave_Type  || leave.type || 'Leave',
-      reason:    leave.reason     || leave.Reason       || null,
-    };
-  } catch (err) {
-    console.warn('[zohoService.isOnLeave]', err.message);
+    token = await getAccessToken();
+  } catch {
     return { onLeave: false, leaveType: null, reason: null };
   }
+
+  const c = getConfig();
+
+  const endpoints = [
+    `https://${c.apiHost}/people/api/leave/getLeavesByUser`,
+    `https://${c.peopleHost}/people/api/leave/getLeavesByUser`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const response = await axios.get(url, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        params:  { empId: employeeEmail, startDate: dateStr, endDate: dateStr, status: 'approved' },
+        timeout: 10_000,
+      });
+      const data    = response.data;
+      const records = data?.response?.result || data?.result || data?.data || [];
+      if (!Array.isArray(records) || records.length === 0) {
+        return { onLeave: false, leaveType: null, reason: null };
+      }
+      const leave = records[0];
+      return {
+        onLeave:   true,
+        leaveType: leave.leaveType || leave.Leave_Type || leave.type || 'Leave',
+        reason:    leave.reason    || leave.Reason     || null,
+      };
+    } catch (err) {
+      zohoLog('WARN', 'isOnLeave endpoint failed', {
+        url, email: employeeEmail, status: err.response?.status,
+      });
+    }
+  }
+
+  return { onLeave: false, leaveType: null, reason: null };
 }
 
-/**
- * Returns array of employee emails with no check-in for a given date.
- */
+// ─── Absent members ───────────────────────────────────────────────────────────
+
 async function getAbsentMembers(date) {
   if (!isConfigured()) return [];
   const dateStr = toDateStr(date);
+
+  let token;
   try {
-    const data = await zohoGet(
-      `/people/api/attendance/getAbsence?date=${dateStr}`
-    );
-    const records = data?.response?.result || data?.result || [];
-    if (!Array.isArray(records)) return [];
-    return records.map((r) => r.email || r.Email || r.empId || r.empEmail).filter(Boolean);
-  } catch (err) {
-    console.warn('[zohoService.getAbsentMembers]', err.message);
+    token = await getAccessToken();
+  } catch {
     return [];
   }
+
+  const c = getConfig();
+
+  for (const host of [c.apiHost, c.peopleHost]) {
+    try {
+      const response = await axios.get(
+        `https://${host}/people/api/attendance/getAbsence`,
+        {
+          headers: { Authorization: `Zoho-oauthtoken ${token}` },
+          params:  { date: dateStr },
+          timeout: 10_000,
+        }
+      );
+      const data    = response.data;
+      const records = data?.response?.result || data?.result || data?.data || [];
+      if (!Array.isArray(records)) return [];
+      return records.map((r) => r.email || r.Email || r.empId || r.empEmail).filter(Boolean);
+    } catch (err) {
+      zohoLog('WARN', 'getAbsentMembers failed', { host, status: err.response?.status });
+    }
+  }
+
+  return [];
 }
 
-/**
- * Returns check-in time string (HH:MM) or null if member didn't check in.
- */
+// ─── Late check-in ────────────────────────────────────────────────────────────
+
 async function getCheckInTime(employeeEmail, date) {
   const att = await getAttendance(employeeEmail, date);
   return att?.checkInTime || null;
 }
 
-/**
- * Returns { late: boolean, minutesLate: number }
- * @param {string} expectedTime  — "HH:MM"
- */
 async function isLateCheckIn(employeeEmail, date, expectedTime) {
   if (!isConfigured()) return { late: false, minutesLate: 0 };
   const att = await getAttendance(employeeEmail, date);
@@ -263,21 +562,19 @@ async function isLateCheckIn(employeeEmail, date, expectedTime) {
   return { late: diff > 0, minutesLate: Math.max(0, diff) };
 }
 
-/**
- * Get attendance for all team members for a given date.
- * @param {Array<{id, name, email}>} members
- * @returns {Array<{ member, attendance, onLeave }>}
- */
+// ─── Team attendance ──────────────────────────────────────────────────────────
+
 async function getTeamAttendance(members, date) {
   if (!isConfigured()) return [];
   const dateStr = toDateStr(date);
   const results = await Promise.all(
     members
-      .filter((m) => m.email)
+      .filter((m) => m.email || m.email_address)
       .map(async (m) => {
+        const email = m.email || m.email_address;
         const [attendance, leaveStatus] = await Promise.all([
-          getAttendance(m.email, dateStr).catch(() => null),
-          isOnLeave(m.email, dateStr).catch(() => ({ onLeave: false })),
+          getAttendance(email, dateStr).catch(() => null),
+          isOnLeave(email, dateStr).catch(() => ({ onLeave: false })),
         ]);
         return { member: m, attendance, onLeave: leaveStatus };
       })
@@ -285,122 +582,8 @@ async function getTeamAttendance(members, date) {
   return results;
 }
 
-/**
- * Get today's attendance record for a single employee.
- * Convenience wrapper over getAttendance() that always uses today's date
- * and also surfaces a normalised `checkedOut` boolean field.
- *
- * @param {string} employeeEmail - Employee's email address
- * @returns {Promise<{
- *   checkedIn: boolean,
- *   checkInTime: string|null,
- *   checkedOut: boolean,
- *   checkOutTime: string|null,
- *   hoursWorked: number|null,
- *   status: string
- * }>}
- */
-async function getTodayAttendance(employeeEmail) {
-  const defaultResult = {
-    checkedIn: false, checkInTime: null,
-    checkedOut: false, checkOutTime: null,
-    hoursWorked: null, status: 'No Record',
-  };
-  if (!isConfigured()) return defaultResult;
-  try {
-    const today = toDateStr(new Date());
-    const data  = await zohoGet(
-      `/people/api/attendance/getAttendance?empId=${encodeURIComponent(employeeEmail)}&startDate=${today}&endDate=${today}`
-    );
+// ─── Connection test ──────────────────────────────────────────────────────────
 
-    const record = data?.response?.result?.[0] || data?.result?.[0] || null;
-    if (!record) return defaultResult;
-
-    const checkIn  = record.checkIn  || record.Check_In  || null;
-    const checkOut = record.checkOut || record.Check_Out || null;
-    const hours    = record.hoursWorked || record.Hours_Worked || null;
-    const status   = record.status   || record.Status    || (checkIn ? 'Present' : 'Absent');
-
-    return {
-      checkedIn:    !!checkIn,
-      checkInTime:  checkIn  ? String(checkIn).substring(0, 5)  : null,
-      checkedOut:   !!checkOut,
-      checkOutTime: checkOut ? String(checkOut).substring(0, 5) : null,
-      hoursWorked:  hours    ? parseFloat(hours) : null,
-      status:       String(status),
-    };
-  } catch (err) {
-    console.warn('[zohoService.getTodayAttendance]', err.message);
-    return defaultResult;
-  }
-}
-
-/**
- * Get today's attendance for ALL configured team members in parallel.
- * Reads TEAM_MEMBERS from the process.env JSON array.
- * Used by the checkout-detection cron job.
- *
- * @returns {Promise<Array<{
- *   email: string,
- *   slackUserId: string,
- *   name: string,
- *   checkedIn: boolean,
- *   checkInTime: string|null,
- *   checkedOut: boolean,
- *   checkOutTime: string|null,
- *   hoursWorked: number|null,
- *   status: string
- * }>>}
- */
-async function getAllTodayAttendance() {
-  if (!isConfigured()) return [];
-
-  const raw = process.env.TEAM_MEMBERS || '';
-  if (!raw.trim()) {
-    console.warn('[zohoService.getAllTodayAttendance] TEAM_MEMBERS env var is not set');
-    return [];
-  }
-
-  let teamMembers = [];
-  try {
-    const parsed = JSON.parse(raw);
-    teamMembers = Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.warn('[zohoService.getAllTodayAttendance] Failed to parse TEAM_MEMBERS:', err.message);
-    return [];
-  }
-
-  // Only process members that have an email address for Zoho lookup
-  const membersWithEmail = teamMembers.filter((m) => m.email);
-  if (membersWithEmail.length === 0) {
-    console.warn('[zohoService.getAllTodayAttendance] No team members have an email address configured');
-    return [];
-  }
-
-  const results = await Promise.all(
-    membersWithEmail.map(async (m) => {
-      const att = await getTodayAttendance(m.email);
-      return {
-        email:        m.email,
-        slackUserId:  m.id,
-        name:         m.name,
-        checkedIn:    att.checkedIn,
-        checkInTime:  att.checkInTime,
-        checkedOut:   att.checkedOut,
-        checkOutTime: att.checkOutTime,
-        hoursWorked:  att.hoursWorked,
-        status:       att.status,
-      };
-    })
-  );
-
-  return results;
-}
-
-/**
- * Test that the Zoho integration works — used by /api/config/health.
- * Returns true or throws.
- */
 async function testConnection() {
   if (!isConfigured()) throw new Error('Zoho credentials not configured');
   await getAccessToken();
@@ -411,12 +594,12 @@ module.exports = {
   isConfigured,
   getAccessToken,
   getAttendance,
+  getTodayAttendance,
+  getAllTodayAttendance,
   isOnLeave,
   getAbsentMembers,
   getCheckInTime,
   isLateCheckIn,
   getTeamAttendance,
-  getTodayAttendance,
-  getAllTodayAttendance,
   testConnection,
 };

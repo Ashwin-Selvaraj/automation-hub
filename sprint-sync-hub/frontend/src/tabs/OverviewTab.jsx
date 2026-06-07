@@ -332,9 +332,28 @@ export default function OverviewTab({ config, navigate }) {
   const [enabled,     setEnabled]     = useState([true, true, true, true]);
   const [perfDash,    setPerfDash]    = useState(null);
   const [popup,        setPopup]        = useState(null); // 'posted' | 'missing' | 'tasks' | 'present' | 'leave' | 'late' | null
-  const [attendance,    setAttendance]    = useState(null); // Zoho data
-  const [checkoutData,  setCheckoutData]  = useState(null); // checkout status
-  const [mismatchData,  setMismatchData]  = useState(null); // mismatch alerts
+  const [attendance,     setAttendance]     = useState(null); // Zoho data
+  const [attendanceError, setAttendanceError] = useState(null); // Zoho error string
+  const [checkoutData,   setCheckoutData]   = useState(null); // checkout status
+  const [mismatchData,   setMismatchData]   = useState(null); // mismatch alerts
+
+  const loadAttendance = () => {
+    fetch(`${API_BASE}/api/attendance/today`)
+      .then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+        return body;
+      })
+      .then((data) => {
+        console.log('[Overview] Attendance response:', data);
+        setAttendance(data);
+        setAttendanceError(null);
+      })
+      .catch((err) => {
+        console.error('[Overview] Failed to fetch attendance:', err.message);
+        setAttendanceError(err.message);
+      });
+  };
 
   const loadCheckoutStatus = () => {
     fetch(`${API_BASE}/api/checkout/status/today`)
@@ -361,21 +380,25 @@ export default function OverviewTab({ config, navigate }) {
       getJiraIssues().catch(() => ({ issues: [] })),
       getSyncLog(50).catch(() => ({ entries: [] })),
       fetch(`${API_BASE}/api/performance/dashboard`).then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${API_BASE}/api/attendance/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch(`${API_BASE}/api/checkout/status/today`).then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch(`${API_BASE}/api/mismatch/current`).then((r) => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([msgData, issData, logData, perf, att, checkout, mismatch]) => {
+    ]).then(([msgData, issData, logData, perf, checkout, mismatch]) => {
       setMessages(msgData.messages || []);
       setIssues(issData.issues || []);
       setLog(logData.entries || []);
       setPerfDash(perf);
-      setAttendance(att);
       setCheckoutData(checkout);
       setMismatchData(mismatch);
     }).finally(() => setLoading(false));
 
-    // Auto-refresh checkout status every 5 minutes
-    const interval = setInterval(loadCheckoutStatus, 5 * 60 * 1000);
+    // Load attendance separately so its errors are isolated
+    loadAttendance();
+
+    // Auto-refresh every 5 minutes
+    const interval = setInterval(() => {
+      loadAttendance();
+      loadCheckoutStatus();
+    }, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -494,6 +517,26 @@ export default function OverviewTab({ config, navigate }) {
           />
         ))}
       </div>
+
+      {/* Attendance error state */}
+      {attendanceError && (
+        <div style={{
+          padding: '10px 14px', borderRadius: 8, marginBottom: 8,
+          background: '#FFFBEB', border: '1px solid #FDE68A',
+          display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 12, color: '#92400E', fontFamily: 'inherit',
+        }}>
+          <span>⚠ Zoho attendance unavailable: {attendanceError}</span>
+          <a
+            href="/api/debug/zoho"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#2563EB', fontSize: 11, textDecoration: 'underline', whiteSpace: 'nowrap' }}
+          >
+            Run diagnostic →
+          </a>
+        </div>
+      )}
 
       {/* Attendance row (Zoho) — only shown when Zoho is configured */}
       {attendance?.configured && (

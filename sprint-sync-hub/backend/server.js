@@ -36,6 +36,12 @@ app.use('/api/mismatch',      require('./routes/mismatch'));
 app.use('/api/roles',         require('./routes/roles'));
 app.use('/api/members',       require('./routes/members'));
 
+// Diagnostic routes — only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/debug', require('./routes/debug'));
+  console.log('[Server] Debug routes mounted at /api/debug (development only)');
+}
+
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();
   const window = getSprintWindow();
@@ -139,6 +145,31 @@ async function boot() {
       } catch (e) {
         console.warn('  Jira ID fetch failed (non-fatal):', e.message);
       }
+    }
+  } catch (_) { /* non-fatal */ }
+
+  // 6e. Startup member email check — warn if Zoho will silently return 0
+  try {
+    const { query } = require('./db');
+    const memberCheck = await query(
+      `SELECT
+         COUNT(*)        AS total,
+         COUNT(email)    AS with_email,
+         COUNT(jira_account_id) AS with_jira_id
+       FROM members WHERE is_active = true`
+    );
+    const stats = memberCheck.rows[0];
+    const total    = parseInt(stats.total, 10);
+    const withEmail = parseInt(stats.with_email, 10);
+    const withJira  = parseInt(stats.with_jira_id, 10);
+    console.log(`[Startup] Members: ${total} total, ${withEmail} with email, ${withJira} with Jira ID`);
+    if (total > 0 && withEmail === 0) {
+      console.warn('[Startup] ⚠ NO MEMBERS HAVE EMAILS — Zoho attendance will return 0 for everyone.');
+      console.warn('[Startup]   Run POST /api/members/fetch-slack-emails to fix this.');
+    }
+    if (total > 0 && withJira === 0) {
+      console.warn('[Startup] ⚠ NO MEMBERS HAVE JIRA IDs — sprint planning assignment will be unassigned.');
+      console.warn('[Startup]   Run POST /api/members/sync-all to fix this.');
     }
   } catch (_) { /* non-fatal */ }
 

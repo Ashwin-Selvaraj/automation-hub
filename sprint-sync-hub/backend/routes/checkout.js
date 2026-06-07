@@ -67,6 +67,7 @@ router.get('/status/today', async (req, res) => {
           || null;
 
         const checkedIn    = att?.checkedIn    ?? false;
+        const checkInTime  = att?.checkInTime  ?? null;
         const checkedOut   = att?.checkedOut   ?? false;
         const checkOutTime = att?.checkOutTime ?? null;
 
@@ -90,6 +91,8 @@ router.get('/status/today', async (req, res) => {
           memberId:       m.id,
           name:           m.name,
           slackUserId:    m.slack_user_id,
+          checkedIn,
+          checkInTime,
           checkedOut,
           checkOutTime,
           postedStandup,
@@ -102,15 +105,26 @@ router.get('/status/today', async (req, res) => {
 
     const summary = {
       totalMembers:            memberRows.length,
+      checkedIn:               memberRows.filter((r) => r.checkedIn).length,
       checkedOut:              memberRows.filter((r) => r.checkedOut).length,
       postedStandup:           memberRows.filter((r) => r.postedStandup).length,
       checkoutWithoutStandup:  memberRows.filter((r) => r.status === 'checked_out_no_standup').length,
       stillIn:                 memberRows.filter((r) => r.status === 'still_in').length,
+      noEmail:                 memberRows.filter((r) => !r.checkedIn && !r.checkedOut && !r.postedStandup).length,
     };
 
-    res.json({ date: today, members: memberRows, summary });
+    res.json({
+      date,
+      fetchedLiveFromZoho: zohoService.isConfigured(),
+      members: memberRows,
+      summary,
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[Checkout] GET /status/today failed:', err.message);
+    res.status(500).json({
+      error: err.message,
+      hint:  'Run GET /api/debug/zoho to diagnose the Zoho integration',
+    });
   }
 });
 
