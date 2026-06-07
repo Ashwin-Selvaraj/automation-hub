@@ -344,7 +344,7 @@ Keep it under 4 sentences. Be direct but kind. Offer to help if blocked. Include
  * @param {string} sprintName - Current sprint name
  * @returns {Promise<string>} Formatted Slack message string
  */
-async function generateWeeklyReport(weekLabel, memberActivity, jiraTasks, sprintName) {
+async function generateWeeklyReport(weekLabel, memberActivity, jiraTasks, sprintName, assignmentSummary) {
   try {
     const client = getClient();
 
@@ -353,11 +353,28 @@ async function generateWeeklyReport(weekLabel, memberActivity, jiraTasks, sprint
       .join('\n\n');
 
     const overdueTasks = jiraTasks.filter((t) => t.daysOverdue > 0);
-    const overdueList = overdueTasks.map((t) => `${t.key}: ${t.summary} (${t.daysOverdue} days overdue)`).join('\n');
-    const taskList = jiraTasks.map((t) => `${t.key}: ${t.summary} — ${t.status}`).join('\n');
+    const overdueList  = overdueTasks.map((t) => `${t.key}: ${t.summary} (${t.daysOverdue} days overdue)`).join('\n');
+    const taskList     = jiraTasks.map((t) => `${t.key}: ${t.summary} — ${t.status}`).join('\n');
+
+    // Build workload distribution context
+    let workloadSection = '';
+    if (assignmentSummary?.byMember?.length > 0) {
+      const lines = assignmentSummary.byMember.map(
+        (m) => `${m.name}: ${m.tasks.length} task${m.tasks.length !== 1 ? 's' : ''} (${[...new Set(m.tasks.map((t) => t.domain))].join(', ')})`
+      );
+      // Flag imbalance: any member with 2x+ tasks of another at the same skill level
+      const counts = assignmentSummary.byMember.map((m) => m.tasks.length);
+      const max    = Math.max(...counts);
+      const min    = Math.min(...counts);
+      const imbalanceNote = max >= min * 2 && min > 0
+        ? `NOTE: Task distribution is unbalanced — max ${max} tasks vs min ${min} tasks assigned.`
+        : '';
+
+      workloadSection = `\nTask distribution this sprint:\n${lines.join('\n')}${imbalanceNote ? '\n' + imbalanceNote : ''}`;
+    }
 
     const res = await client.messages.create({
-      model: MODEL,
+      model:      MODEL,
       max_tokens: MAX_TOKENS,
       messages: [
         {
@@ -374,6 +391,7 @@ async function generateWeeklyReport(weekLabel, memberActivity, jiraTasks, sprint
 ⚠️ *Needs Attention*
 • [overdue task key]: [title] — [X] days overdue
 • [member]: only [N]/[total working days] updates posted
+• [flag if any member has 2x+ tasks of another at the same skill level — include in this section]
 
 👥 *Engagement Scores*
 • [member]: [N]/[total] updates
@@ -393,6 +411,7 @@ ${taskList || 'No tasks found'}
 
 Overdue:
 ${overdueList || 'None'}
+${workloadSection}
 
 Return only the formatted report, no extra text.`,
         },

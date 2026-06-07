@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import { theme, styles } from '../theme.js';
 import { API_BASE } from '../config.js';
 
@@ -32,12 +32,41 @@ function formatDate(d) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 const PRIORITY_STYLE = {
   Highest: { bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' },
   High:    { bg: '#FFF7ED', text: '#C2410C', border: '#FDBA74' },
   Medium:  { bg: '#F9FAFB', text: '#374151', border: '#E5E7EB' },
   Low:     { bg: '#F9FAFB', text: '#9CA3AF', border: '#E5E7EB' },
 };
+
+const DOMAIN_STYLE = {
+  backend:    { bg: '#EFF6FF', text: '#2563EB', border: '#BFDBFE', label: 'Backend' },
+  frontend:   { bg: '#F0FDF4', text: '#16A34A', border: '#BBF7D0', label: 'Frontend' },
+  ai:         { bg: '#FFFBEB', text: '#D97706', border: '#FDE68A', label: 'AI' },
+  blockchain: { bg: '#F0FDFA', text: '#0D9488', border: '#99F6E4', label: 'Blockchain' },
+  design:     { bg: '#FDF4FF', text: '#9333EA', border: '#E9D5FF', label: 'Design' },
+  fullstack:  { bg: '#F5F3FF', text: '#7C3AED', border: '#DDD6FE', label: 'Full Stack' },
+  general:    { bg: '#F9FAFB', text: '#6B7280', border: '#E5E7EB', label: 'General' },
+};
+
+// Which role slugs are eligible per domain
+const DOMAIN_SLUGS = {
+  backend:    ['backend_developer', 'full_stack_developer'],
+  frontend:   ['frontend_developer', 'full_stack_developer'],
+  ai:         ['ai_engineer'],
+  blockchain: ['blockchain_developer'],
+  design:     ['ui_ux_designer'],
+  fullstack:  ['full_stack_developer', 'backend_developer', 'frontend_developer'],
+  general:    null, // all assignable
+};
+
+function isEligibleForDomain(member, domain) {
+  const slugs = DOMAIN_SLUGS[domain] ?? null;
+  if (slugs === null) return true;
+  return (member.roleSlugs || []).some((s) => slugs.includes(s));
+}
 
 // ─── Small UI primitives ──────────────────────────────────────────────────────
 
@@ -50,6 +79,19 @@ function PriorityBadge({ priority }) {
       background: s.bg, color: s.text, border: `1px solid ${s.border}`,
     }}>
       {priority}
+    </span>
+  );
+}
+
+function DomainBadge({ domain }) {
+  const s = DOMAIN_STYLE[domain] || DOMAIN_STYLE.general;
+  return (
+    <span style={{
+      display: 'inline-block', fontSize: 11, fontWeight: 600, fontFamily: fonts.body,
+      padding: '2px 8px', borderRadius: 100,
+      background: s.bg, color: s.text, border: `1px solid ${s.border}`,
+    }}>
+      {s.label}
     </span>
   );
 }
@@ -158,9 +200,7 @@ function InputState({ onBreakdown }) {
     fontFamily: fonts.body, fontSize: 14,
     padding: '8px 12px', borderRadius: radius.md,
     border: `1px solid ${colors.gray200}`,
-    color: colors.gray900,
-    background: colors.white,
-    outline: 'none',
+    color: colors.gray900, background: colors.white, outline: 'none',
   };
   const labelStyle = {
     display: 'block', fontSize: 13, fontWeight: 600,
@@ -171,7 +211,7 @@ function InputState({ onBreakdown }) {
     <div style={{ maxWidth: 640 }}>
       <h2 style={{ ...styles.pageTitle, marginBottom: 4 }}>Plan New Sprint</h2>
       <p style={{ ...styles.subtitle, marginBottom: 32 }}>
-        Describe your sprint goal and Claude will break it into tasks.
+        Describe your sprint goal and Claude will break it into role-matched, workload-balanced tasks.
       </p>
 
       <Card style={{ padding: 28 }}>
@@ -222,44 +262,53 @@ function InputState({ onBreakdown }) {
   );
 }
 
-// ─── Capacity sidebar panel ───────────────────────────────────────────────────
+// ─── Workload panel (right sidebar) ──────────────────────────────────────────
 
-function CapacityPanel({ members, assignments, tasks }) {
-  // Compute in-plan task counts per member
+function WorkloadPanel({ members, assignments, tasks }) {
+  // Count in-plan assignments per member
   const planCounts = {};
   Object.values(assignments).forEach((mid) => {
     if (mid) planCounts[mid] = (planCounts[mid] || 0) + 1;
   });
 
-  function barColor(score) {
-    if (score >= 60) return colors.green600;
-    if (score >= 40) return colors.amber600;
-    return colors.red600;
-  }
-
   return (
-    <Card style={{ padding: '16px 20px', position: 'sticky', top: 72, minWidth: 200 }}>
-      <div style={{ ...styles.sectionHeader, marginBottom: 14 }}>Team Capacity</div>
+    <Card style={{ padding: '16px 20px', position: 'sticky', top: 72, minWidth: 210 }}>
+      <div style={{ ...styles.sectionHeader, marginBottom: 14 }}>Team Workload</div>
       {members.length === 0 && (
         <p style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body }}>No team data</p>
       )}
       {members.map((m) => {
-        // Reduce capacity based on plan assignments
-        const planPenalty = (planCounts[m.memberId] || 0) * 15;
-        const effectiveScore = Math.max(0, Math.min(100, m.capacityScore - planPenalty));
-        const pct = `${effectiveScore}%`;
-        const color = barColor(effectiveScore);
+        const existing = m.currentTasks || 0;
+        const planned  = planCounts[m.memberId] || 0;
+        const total    = existing + planned;
+        const roleLabel = (m.roles || []).slice(0, 1).join(', ') || 'Engineer';
+
+        // Bar: 0=empty, 1-2=green, 3-4=amber, 5+=red; max visual at 8
+        const barPct  = Math.min(total / 8, 1);
+        const barColor = total === 0 ? colors.gray200 : total <= 2 ? colors.green600 : total <= 4 ? colors.amber600 : colors.red600;
+        const label   = total === 0 ? 'free' : total <= 2 ? `${total} tasks` : total <= 4 ? `${total} tasks` : `${total} tasks ← heavy`;
+
         return (
-          <div key={m.memberId} style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-              <span style={{ fontSize: 12, fontFamily: fonts.body, color: colors.gray700 }}>{m.name}</span>
-              <span style={{ fontSize: 11, fontFamily: fonts.mono, color }}>
-                {effectiveScore}%
-                {planCounts[m.memberId] ? ` · ${planCounts[m.memberId]} tasks` : ''}
+          <div key={m.memberId} style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+              <span style={{ fontSize: 12, fontFamily: fonts.body, color: colors.gray800, fontWeight: 500 }}>
+                {m.name}
+              </span>
+              <span style={{
+                fontSize: 10, fontFamily: fonts.mono,
+                color: total >= 5 ? colors.red600 : total === 0 ? colors.gray400 : colors.gray600,
+              }}>
+                {label}
               </span>
             </div>
-            <div style={{ height: 6, borderRadius: 3, background: colors.gray100, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: pct, background: color, borderRadius: 3, transition: 'width 0.3s' }} />
+            <div style={{ fontSize: 10, color: colors.gray400, fontFamily: fonts.body, marginBottom: 3 }}>
+              {roleLabel}
+            </div>
+            <div style={{ height: 5, borderRadius: 3, background: colors.gray100, overflow: 'hidden', position: 'relative' }}>
+              {total === 0
+                ? <div style={{ height: '100%', width: '100%', background: 'transparent', border: `1px solid ${colors.gray200}`, borderRadius: 3 }} />
+                : <div style={{ height: '100%', width: `${barPct * 100}%`, background: barColor, borderRadius: 3, transition: 'width 0.3s' }} />
+              }
             </div>
           </div>
         );
@@ -268,197 +317,125 @@ function CapacityPanel({ members, assignments, tasks }) {
   );
 }
 
-// ─── STATE 2: Review ─────────────────────────────────────────────────────────
+// ─── Assignment summary ───────────────────────────────────────────────────────
 
-function ReviewState({ formData, breakdownData, onCreate, onBack }) {
-  const { sprintName, startDate, endDate, goalText } = formData;
-  const { suggestedTasks: initialTasks, teamCapacity, totalWorkingDays } = breakdownData;
+function AssignmentSummary({ tasks, assignments, workloadSnapshot }) {
+  const memberById = {};
+  (workloadSnapshot || []).forEach((m) => { memberById[m.memberId] = m; });
 
-  const [tasks, setTasks]             = useState(() => initialTasks.map((t, i) => ({ ...t, _idx: i })));
-  const [assignments, setAssignments] = useState(() => {
-    const map = {};
-    initialTasks.forEach((t, i) => {
-      if (t.suggestedAssigneeId) map[i] = t.suggestedAssigneeId;
-    });
-    return map;
+  // Compute per-member task list from current assignments state
+  const byMember = {};
+  tasks.forEach((task, idx) => {
+    const mid = assignments[idx];
+    if (!mid) return;
+    const member = memberById[mid];
+    const name   = member?.name || `Member #${mid}`;
+    if (!byMember[name]) byMember[name] = { name, roles: member?.roles || [], tasks: [] };
+    byMember[name].tasks.push(task);
   });
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState(null);
-  const [showConfirm, setShowConfirm] = useState(false);
 
-  const members = teamCapacity || [];
+  const unassigned = tasks.filter((_, idx) => !assignments[idx]);
 
-  function updateTask(idx, field, value) {
-    setTasks((prev) => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
-  }
-
-  function removeTask(idx) {
-    setTasks((prev) => prev.filter((_, i) => i !== idx));
-    setAssignments((prev) => {
-      const next = {};
-      let newIdx = 0;
-      for (let i = 0; i < tasks.length; i++) {
-        if (i === idx) continue;
-        if (prev[i] !== undefined) next[newIdx] = prev[i];
-        newIdx++;
-      }
-      return next;
-    });
-  }
-
-  function addTask() {
-    setTasks((prev) => [
-      ...prev,
-      { title: '', description: '', priority: 'Medium', estimatedDays: 2,
-        suggestedDueDate: endDate, skillTags: [],
-        assignmentReasons: [], alternativeAssigneeName: null, alternativeAssigneeId: null, allRankings: [] },
-    ]);
-  }
-
-  async function handleCreate() {
-    setShowConfirm(false);
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await api('/api/sprint-planning/create', {
-        method: 'POST',
-        body: JSON.stringify({ sprintName, startDate, endDate, goalText, tasks, assignments }),
-      });
-      onCreate(result);
-    } catch (err) {
-      setError(err.message);
-      setLoading(false);
-    }
-  }
-
-  const assignedCount = new Set(Object.values(assignments).filter(Boolean)).size;
+  const rows = Object.values(byMember).sort((a, b) => b.tasks.length - a.tasks.length);
 
   return (
-    <div>
-      {/* Header */}
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ ...styles.pageTitle, marginBottom: 4 }}>Review Sprint Plan</h2>
-        <p style={{ ...styles.subtitle }}>
-          {tasks.length} tasks suggested for <strong>{sprintName}</strong>
-        </p>
-      </div>
-
-      {/* Summary bar */}
-      <Card style={{ padding: '12px 20px', marginBottom: 20, display: 'flex', gap: 24 }}>
-        {[
-          [`${tasks.length}`, 'tasks'],
-          [`${assignedCount}`, 'members assigned'],
-          [`${totalWorkingDays}`, 'working days'],
-        ].map(([val, label]) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-            <span style={{ fontSize: 20, fontWeight: 700, color: colors.blue600, fontFamily: fonts.body }}>{val}</span>
-            <span style={{ fontSize: 13, color: colors.gray400, fontFamily: fonts.body }}>{label}</span>
-          </div>
-        ))}
-      </Card>
-
-      {error && (
-        <div style={{
-          marginBottom: 16, padding: '10px 14px', borderRadius: radius.md,
-          background: colors.tintRed.bg, color: colors.tintRed.text,
-          border: `1px solid ${colors.tintRed.border}`,
-          fontSize: 13, fontFamily: fonts.body,
-        }}>
-          {error}
-        </div>
-      )}
-
-      {/* Two-column layout: tasks + capacity sidebar */}
-      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
-        {/* Left: task cards */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 12 }}>
-            {tasks.map((task, idx) => (
-              <TaskCard
-                key={idx}
-                task={task}
-                idx={idx}
-                members={members}
-                assignedMemberId={assignments[idx] || null}
-                onUpdate={(field, val) => updateTask(idx, field, val)}
-                onAssign={(memberId) => setAssignments((prev) => ({ ...prev, [idx]: memberId }))}
-                onRemove={() => removeTask(idx)}
-              />
-            ))}
-          </div>
-
-          <button onClick={addTask} style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: colors.linkBlue, fontSize: 13, fontFamily: fonts.body, fontWeight: 500,
-            padding: '4px 0', marginBottom: 32,
-          }}>
-            + Add Task
-          </button>
-        </div>
-
-        {/* Right: capacity sidebar */}
-        {members.length > 0 && (
-          <div style={{ width: 220, flexShrink: 0 }}>
-            <CapacityPanel members={members} assignments={assignments} tasks={tasks} />
-          </div>
-        )}
-      </div>
-
-      {/* Sticky action bar */}
+    <Card style={{ marginBottom: 20 }}>
       <div style={{
-        position: 'sticky', bottom: 0, background: colors.white,
-        borderTop: `1px solid ${colors.gray200}`,
-        padding: '14px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        marginTop: 8,
+        padding: '12px 20px', borderBottom: `1px solid ${colors.gray100}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        <Btn onClick={onBack}>← Back</Btn>
-        <Btn primary loading={loading} onClick={() => setShowConfirm(true)} disabled={loading || tasks.length === 0}>
-          Create Sprint in Jira →
-        </Btn>
+        <span style={styles.sectionHeader}>Sprint Assignment Summary</span>
       </div>
 
-      {showConfirm && (
-        <ConfirmDialog
-          sprintName={sprintName}
-          taskCount={tasks.length}
-          onConfirm={handleCreate}
-          onCancel={() => setShowConfirm(false)}
-        />
+      {rows.map((row) => (
+        <div key={row.name} style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '9px 20px', borderBottom: `1px solid ${colors.gray100}`,
+        }}>
+          <span style={{ fontSize: 13, fontFamily: fonts.body, color: colors.gray800, fontWeight: 500, minWidth: 120 }}>
+            {row.name}
+          </span>
+          <span style={{ fontSize: 12, fontFamily: fonts.body, color: colors.gray500, flex: 1 }}>
+            {(row.roles || []).slice(0, 2).join(', ') || 'Engineer'}
+          </span>
+          <span style={{
+            fontSize: 13, fontWeight: 600, fontFamily: fonts.body,
+            color: row.tasks.length >= 5 ? colors.red600 : colors.gray700,
+          }}>
+            {row.tasks.length} task{row.tasks.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+      ))}
+
+      {unassigned.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '9px 20px', borderBottom: `1px solid ${colors.gray100}`,
+          background: colors.tintAmber.bg,
+        }}>
+          <span style={{ fontSize: 13, fontFamily: fonts.body, color: colors.amber600, fontWeight: 500, flex: 1 }}>
+            Unassigned
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, fontFamily: fonts.body, color: colors.amber600 }}>
+            {unassigned.length} task{unassigned.length !== 1 ? 's' : ''} ⚠ Requires manual assignment
+          </span>
+        </div>
       )}
-    </div>
+
+      <div style={{
+        padding: '9px 20px',
+        borderTop: `1px solid ${colors.gray100}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      }}>
+        <span style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body }}>
+          {tasks.length} total tasks · {tasks.length - unassigned.length} assigned
+        </span>
+      </div>
+    </Card>
   );
 }
 
-// ─── Task card with smart assignment panel ────────────────────────────────────
+// ─── Task card ────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, onRemove }) {
+function TaskCard({ task, idx, workloadSnapshot, assignedMemberId, onUpdate, onAssign, onRemove }) {
   const [editingTitle, setEditingTitle] = useState(false);
 
-  // Find the currently assigned member's score/reasons from allRankings
-  const allRankings      = task.allRankings      || [];
+  const allRankings       = task.allRankings       || [];
   const assignmentReasons = task.assignmentReasons || [];
   const assignmentScore   = task.assignmentScore   || null;
-  const altName           = task.alternativeAssigneeName || null;
-  const altId             = task.alternativeAssigneeId   || null;
 
   const currentRanking = allRankings.find((r) => r.memberId === assignedMemberId);
   const displayScore   = currentRanking?.score ?? assignmentScore;
   const displayReasons = currentRanking?.reasons ?? assignmentReasons;
 
+  // Split members into eligible (match domain) and others
+  const members         = workloadSnapshot || [];
+  const eligibleMembers = members.filter((m) => isEligibleForDomain(m, task.domain));
+  const otherMembers    = members.filter((m) => !isEligibleForDomain(m, task.domain));
+
+  // Warn if assigned member is outside domain
+  const assignedMember     = members.find((m) => m.memberId === assignedMemberId);
+  const domainMismatch     = assignedMember && !isEligibleForDomain(assignedMember, task.domain) && task.domain !== 'general';
+  const requiresManual     = task.requiresManualAssignment && !assignedMemberId;
+
   return (
     <Card style={{ padding: '16px 20px', position: 'relative' }}>
-      {/* Remove button */}
       <button onClick={onRemove} style={{
         position: 'absolute', top: 12, right: 12,
         background: 'none', border: 'none', cursor: 'pointer',
         color: colors.gray400, fontSize: 16, lineHeight: 1, padding: 4,
       }} title="Remove task">×</button>
 
-      {/* Priority + title */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8, paddingRight: 28 }}>
+      {/* Priority + domain + title */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8, paddingRight: 28, flexWrap: 'wrap' }}>
         <div style={{ flexShrink: 0, paddingTop: 1 }}>
           <PriorityBadge priority={task.priority} />
         </div>
+        {task.domain && (
+          <div style={{ flexShrink: 0, paddingTop: 1 }}>
+            <DomainBadge domain={task.domain} />
+          </div>
+        )}
         {editingTitle ? (
           <input
             autoFocus
@@ -469,7 +446,7 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
             style={{
               flex: 1, fontFamily: fonts.body, fontSize: 14, fontWeight: 600,
               color: colors.gray900, border: `1px solid ${colors.blue600}`,
-              borderRadius: radius.sm, padding: '2px 6px', outline: 'none',
+              borderRadius: radius.sm, padding: '2px 6px', outline: 'none', minWidth: 120,
             }}
           />
         ) : (
@@ -480,7 +457,7 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
               flex: 1, fontSize: 14, fontWeight: 600, color: colors.gray900,
               fontFamily: fonts.body, cursor: 'text',
               borderBottom: `1px dashed ${colors.gray300}`,
-              lineHeight: 1.4,
+              lineHeight: 1.4, minWidth: 120,
             }}
           >
             {task.title || <span style={{ color: colors.gray400 }}>Untitled task</span>}
@@ -488,12 +465,10 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
         )}
       </div>
 
-      {/* Description */}
       <p style={{ fontSize: 13, color: colors.gray600, fontFamily: fonts.body, margin: '0 0 10px', lineHeight: 1.6 }}>
         {task.description}
       </p>
 
-      {/* Meta row */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginBottom: 12, alignItems: 'center' }}>
         <span style={{ fontSize: 12, color: colors.gray600, fontFamily: fonts.body }}>
           <span style={{ color: colors.gray400 }}>Due: </span>{formatDate(task.suggestedDueDate)}
@@ -506,12 +481,22 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
         </div>
       </div>
 
+      {/* Requires manual assignment warning */}
+      {requiresManual && (
+        <div style={{
+          marginBottom: 10, padding: '8px 12px', borderRadius: radius.md,
+          background: '#FFFBEB', color: '#D97706',
+          border: '1px solid #FDE68A', fontSize: 12, fontFamily: fonts.body,
+        }}>
+          ⚠ No {task.domain} engineers in the team — please assign manually
+        </div>
+      )}
+
       {/* Assignment section */}
       <div style={{
         borderTop: `1px solid ${colors.gray100}`, paddingTop: 10,
         display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'start',
       }}>
-        {/* Left: dropdown + reasons + alternative */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <span style={{ fontSize: 12, color: colors.gray600, fontFamily: fonts.body, whiteSpace: 'nowrap' }}>
@@ -527,17 +512,34 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
               }}
             >
               <option value="">— Unassigned —</option>
-              {members.map((m) => (
+              {eligibleMembers.length > 0 && eligibleMembers.map((m) => (
                 <option key={m.memberId} value={m.memberId}>{m.name}</option>
               ))}
+              {otherMembers.length > 0 && (
+                <optgroup label="Outside task domain">
+                  {otherMembers.map((m) => (
+                    <option key={m.memberId} value={m.memberId}>{m.name} (outside domain)</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
+
+          {/* Domain mismatch warning */}
+          {domainMismatch && (
+            <div style={{ fontSize: 11, color: colors.amber600, fontFamily: fonts.body, marginBottom: 6 }}>
+              ⚠ This member's role doesn't match the task domain
+            </div>
+          )}
 
           {/* Assignment reasons */}
           {displayReasons.length > 0 && (
             <div style={{ marginBottom: 6 }}>
               {displayReasons.map((reason, i) => (
-                <div key={i} style={{ fontSize: 11, color: reason.startsWith('⚠') ? colors.amber600 : colors.green600, fontFamily: fonts.body, lineHeight: 1.5 }}>
+                <div key={i} style={{
+                  fontSize: 11, fontFamily: fonts.body, lineHeight: 1.5,
+                  color: reason.startsWith('⚠') || reason.toLowerCase().includes('low') ? colors.amber600 : colors.green600,
+                }}>
                   {reason}
                 </div>
               ))}
@@ -545,11 +547,11 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
           )}
 
           {/* Alternative assignee */}
-          {altName && altId && altId !== assignedMemberId && (
+          {task.alternativeAssigneeName && task.alternativeAssigneeId && task.alternativeAssigneeId !== assignedMemberId && (
             <div style={{ fontSize: 11, color: colors.gray400, fontFamily: fonts.body }}>
-              Alternative: {altName}&nbsp;&nbsp;
+              Alternative: {task.alternativeAssigneeName}&nbsp;&nbsp;
               <button
-                onClick={() => onAssign(altId)}
+                onClick={() => onAssign(task.alternativeAssigneeId)}
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: colors.linkBlue, fontSize: 11, fontFamily: fonts.body,
@@ -562,7 +564,7 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
           )}
         </div>
 
-        {/* Right: score badge */}
+        {/* Score badge */}
         {displayScore !== null && (
           <div style={{ textAlign: 'center' }}>
             <div style={{
@@ -585,7 +587,7 @@ function TaskCard({ task, idx, members, assignedMemberId, onUpdate, onAssign, on
   );
 }
 
-function ConfirmDialog({ sprintName, taskCount, channelName, onConfirm, onCancel }) {
+function ConfirmDialog({ sprintName, taskCount, onConfirm, onCancel }) {
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
@@ -608,6 +610,213 @@ function ConfirmDialog({ sprintName, taskCount, channelName, onConfirm, onCancel
   );
 }
 
+// ─── STATE 2: Review ──────────────────────────────────────────────────────────
+
+function ReviewState({ formData, breakdownData, onCreate, onBack }) {
+  const { sprintName, startDate, endDate, goalText } = formData;
+  const { suggestedTasks: initialTasks, workloadSnapshot, teamCapacity, totalWorkingDays, warning } = breakdownData;
+
+  // workloadSnapshot is the new format; fall back to teamCapacity for backward compat
+  const members = workloadSnapshot || (teamCapacity || []).map((m) => ({
+    memberId:      m.memberId,
+    name:          m.name,
+    roles:         [],
+    roleSlugs:     [],
+    currentTasks:  m.currentTasks || 0,
+    capacityLabel: m.currentTasks === 0 ? 'free' : m.currentTasks <= 2 ? 'light' : m.currentTasks <= 4 ? 'moderate' : 'heavy',
+  }));
+
+  const [tasks, setTasks]             = useState(() => initialTasks.map((t, i) => ({ ...t, _idx: i })));
+  const [assignments, setAssignments] = useState(() => {
+    const map = {};
+    initialTasks.forEach((t, i) => {
+      if (t.suggestedAssigneeId) map[i] = t.suggestedAssigneeId;
+    });
+    return map;
+  });
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  function updateTask(idx, field, value) {
+    setTasks((prev) => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
+  }
+
+  function removeTask(idx) {
+    setTasks((prev) => prev.filter((_, i) => i !== idx));
+    setAssignments((prev) => {
+      const next = {};
+      let newIdx = 0;
+      for (let i = 0; i < tasks.length; i++) {
+        if (i === idx) continue;
+        if (prev[i] !== undefined) next[newIdx] = prev[i];
+        newIdx++;
+      }
+      return next;
+    });
+  }
+
+  function addTask() {
+    setTasks((prev) => [
+      ...prev,
+      {
+        title: '', description: '', domain: 'general', priority: 'Medium',
+        estimatedDays: 2, suggestedDueDate: endDate, skillTags: [],
+        assignmentReasons: [], allRankings: [],
+        requiresManualAssignment: false,
+      },
+    ]);
+  }
+
+  // Check if any task requires manual assignment but has none
+  const blockedTasks = tasks.filter((t, idx) => t.requiresManualAssignment && !assignments[idx]);
+  const canCreate    = blockedTasks.length === 0 && tasks.length > 0;
+
+  async function handleCreate() {
+    setShowConfirm(false);
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api('/api/sprint-planning/create', {
+        method: 'POST',
+        body: JSON.stringify({ sprintName, startDate, endDate, goalText, tasks, assignments }),
+      });
+      onCreate(result);
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+    }
+  }
+
+  const assignedCount = new Set(Object.values(assignments).filter(Boolean)).size;
+
+  return (
+    <div>
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ ...styles.pageTitle, marginBottom: 4 }}>Review Sprint Plan</h2>
+        <p style={{ ...styles.subtitle }}>
+          {tasks.length} tasks suggested for <strong>{sprintName}</strong>
+        </p>
+      </div>
+
+      {/* Summary bar */}
+      <Card style={{ padding: '12px 20px', marginBottom: 20, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+        {[
+          [`${tasks.length}`, 'tasks'],
+          [`${assignedCount}`, 'members assigned'],
+          [`${totalWorkingDays}`, 'working days'],
+        ].map(([val, label]) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span style={{ fontSize: 20, fontWeight: 700, color: colors.blue600, fontFamily: fonts.body }}>{val}</span>
+            <span style={{ fontSize: 13, color: colors.gray400, fontFamily: fonts.body }}>{label}</span>
+          </div>
+        ))}
+      </Card>
+
+      {/* Heavy load warning */}
+      {warning && (
+        <div style={{
+          marginBottom: 16, padding: '10px 14px', borderRadius: radius.md,
+          background: colors.tintAmber.bg, color: colors.tintAmber.text,
+          border: `1px solid ${colors.tintAmber.border}`,
+          fontSize: 13, fontFamily: fonts.body,
+        }}>
+          ⚠ {warning}
+        </div>
+      )}
+
+      {error && (
+        <div style={{
+          marginBottom: 16, padding: '10px 14px', borderRadius: radius.md,
+          background: colors.tintRed.bg, color: colors.tintRed.text,
+          border: `1px solid ${colors.tintRed.border}`,
+          fontSize: 13, fontFamily: fonts.body,
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* Two-column layout */}
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+        {/* Task cards */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 12 }}>
+            {tasks.map((task, idx) => (
+              <TaskCard
+                key={idx}
+                task={task}
+                idx={idx}
+                workloadSnapshot={members}
+                assignedMemberId={assignments[idx] || null}
+                onUpdate={(field, val) => updateTask(idx, field, val)}
+                onAssign={(memberId) => setAssignments((prev) => ({ ...prev, [idx]: memberId }))}
+                onRemove={() => removeTask(idx)}
+              />
+            ))}
+          </div>
+
+          <button onClick={addTask} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: colors.linkBlue, fontSize: 13, fontFamily: fonts.body, fontWeight: 500,
+            padding: '4px 0', marginBottom: 24,
+          }}>
+            + Add Task
+          </button>
+
+          {/* Assignment summary */}
+          <AssignmentSummary tasks={tasks} assignments={assignments} workloadSnapshot={members} />
+
+          {/* Block create if manual assignments missing */}
+          {blockedTasks.length > 0 && (
+            <div style={{
+              marginBottom: 16, padding: '10px 14px', borderRadius: radius.md,
+              background: colors.tintRed.bg, color: colors.tintRed.text,
+              border: `1px solid ${colors.tintRed.border}`,
+              fontSize: 13, fontFamily: fonts.body,
+            }}>
+              Please assign all tasks before creating the sprint.
+              {' '}{blockedTasks.length} task{blockedTasks.length !== 1 ? 's' : ''} still need{blockedTasks.length === 1 ? 's' : ''} a manual assignee.
+            </div>
+          )}
+        </div>
+
+        {/* Workload sidebar */}
+        {members.length > 0 && (
+          <div style={{ width: 230, flexShrink: 0 }}>
+            <WorkloadPanel members={members} assignments={assignments} tasks={tasks} />
+          </div>
+        )}
+      </div>
+
+      {/* Sticky action bar */}
+      <div style={{
+        position: 'sticky', bottom: 0, background: colors.white,
+        borderTop: `1px solid ${colors.gray200}`,
+        padding: '14px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginTop: 8,
+      }}>
+        <Btn onClick={onBack}>← Back</Btn>
+        <Btn
+          primary loading={loading}
+          onClick={() => setShowConfirm(true)}
+          disabled={loading || tasks.length === 0 || !canCreate}
+        >
+          Create Sprint in Jira →
+        </Btn>
+      </div>
+
+      {showConfirm && (
+        <ConfirmDialog
+          sprintName={sprintName}
+          taskCount={tasks.length}
+          onConfirm={handleCreate}
+          onCancel={() => setShowConfirm(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── STATE 3: Confirmed ───────────────────────────────────────────────────────
 
 function ConfirmedState({ formData, createResult, onBackToOverview }) {
@@ -615,17 +824,16 @@ function ConfirmedState({ formData, createResult, onBackToOverview }) {
   const {
     tasksCreated, tasksFailed, createdIssues,
     kickoffMessageSent, jiraSiteUrl,
+    validationWarnings, jiraIdWarnings,
   } = createResult;
 
   const successIssues = (createdIssues || []).filter((i) => i.success);
   const failedIssues  = (createdIssues || []).filter((i) => !i.success);
+  const allWarnings   = [...(validationWarnings || []), ...(jiraIdWarnings || [])];
 
   return (
     <div style={{ maxWidth: 640 }}>
-      {/* Success header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 28,
-      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 28 }}>
         <div style={{
           width: 40, height: 40, borderRadius: '50%',
           background: colors.green50, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -643,8 +851,7 @@ function ConfirmedState({ formData, createResult, onBackToOverview }) {
         </div>
       </div>
 
-      {/* Stats */}
-      <Card style={{ padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 24 }}>
+      <Card style={{ padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
         <StatPill value={tasksCreated} label="tasks created in Jira" color={colors.green600} />
         {tasksFailed > 0 && <StatPill value={tasksFailed} label="tasks failed" color={colors.red600} />}
         <StatPill
@@ -665,8 +872,18 @@ function ConfirmedState({ formData, createResult, onBackToOverview }) {
         </div>
       )}
 
-      {/* Issue list */}
-      <Card style={{ padding: '0', marginBottom: 24, overflow: 'hidden' }}>
+      {allWarnings.length > 0 && (
+        <div style={{
+          padding: '10px 14px', borderRadius: radius.md, marginBottom: 16,
+          background: colors.tintAmber.bg, color: colors.tintAmber.text,
+          border: `1px solid ${colors.tintAmber.border}`,
+          fontSize: 13, fontFamily: fonts.body,
+        }}>
+          {allWarnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+        </div>
+      )}
+
+      <Card style={{ padding: 0, marginBottom: 24, overflow: 'hidden' }}>
         <div style={{ padding: '12px 20px', borderBottom: `1px solid ${colors.gray100}` }}>
           <span style={styles.sectionHeader}>Created Issues</span>
         </div>
@@ -687,7 +904,7 @@ function ConfirmedState({ formData, createResult, onBackToOverview }) {
             </span>
           </div>
         ))}
-        {failedIssues.length > 0 && failedIssues.map((issue, i) => (
+        {failedIssues.map((issue, i) => (
           <div key={i} style={{
             display: 'flex', alignItems: 'flex-start', gap: 12,
             padding: '10px 20px', borderBottom: `1px solid ${colors.gray100}`,
@@ -702,7 +919,6 @@ function ConfirmedState({ formData, createResult, onBackToOverview }) {
         ))}
       </Card>
 
-      {/* CTA buttons */}
       <div style={{ display: 'flex', gap: 12 }}>
         {jiraSiteUrl && (
           <a href={`${jiraSiteUrl}/jira/software/projects`} target="_blank" rel="noopener noreferrer">
@@ -727,8 +943,8 @@ function StatPill({ value, label, color }) {
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
 export default function SprintPlanningTab({ navigate }) {
-  const [state, setState]           = useState('input');   // 'input' | 'review' | 'confirmed'
-  const [formData, setFormData]     = useState(null);
+  const [state, setState]                 = useState('input');
+  const [formData, setFormData]           = useState(null);
   const [breakdownData, setBreakdownData] = useState(null);
   const [createResult, setCreateResult]  = useState(null);
 
@@ -750,15 +966,9 @@ export default function SprintPlanningTab({ navigate }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  function handleBackToOverview() {
-    if (navigate) navigate('overview');
-  }
-
   return (
     <div style={{ paddingBottom: 80 }}>
-      {state === 'input' && (
-        <InputState onBreakdown={handleBreakdown} />
-      )}
+      {state === 'input' && <InputState onBreakdown={handleBreakdown} />}
       {state === 'review' && (
         <ReviewState
           formData={formData}
@@ -771,7 +981,7 @@ export default function SprintPlanningTab({ navigate }) {
         <ConfirmedState
           formData={formData}
           createResult={createResult}
-          onBackToOverview={handleBackToOverview}
+          onBackToOverview={() => navigate && navigate('overview')}
         />
       )}
     </div>

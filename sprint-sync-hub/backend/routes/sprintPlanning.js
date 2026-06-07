@@ -3,6 +3,7 @@
 const express               = require('express');
 const router                = express.Router();
 const sprintPlanningService = require('../services/sprintPlanningService');
+const memberRoleRepository  = require('../repositories/memberRoleRepository');
 const memberRepo            = require('../repositories/memberRepository');
 const taskRepo              = require('../repositories/taskRepository');
 const statsRepo             = require('../repositories/statsRepository');
@@ -11,101 +12,137 @@ const zohoService           = require('../services/zohoService');
 
 const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
 
-// ─── POST /api/sprint-planning/breakdown ────────────────────────────────────
-// Call with { goalText, sprintName, startDate, endDate }
-// Returns suggested tasks with assignments.
-router.post('/breakdown', async (req, res) => {
-  try {
-    const { goalText, sprintName, startDate, endDate } = req.body;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-    if (!goalText || !sprintName || !startDate || !endDate) {
-      return res.status(400).json({
-        error: 'Missing required fields: goalText, sprintName, startDate, endDate',
-      });
-    }
+function getCapacityLabel(taskCount) {
+  if (taskCount === 0) return 'free';
+  if (taskCount <= 2)  return 'light';
+  if (taskCount <= 4)  return 'moderate';
+  return 'heavy';
+}
 
-    const orgId = ORG_ID();
+async function buildWorkloadSnapshot(organisationId) {
+  const members    = await memberRoleRepository.getAllMembersWithRoles(organisationId);
+  const taskCounts = await taskRepo.getActiveTaskCountsPerMember(organisationId);
 
-    // Fetch all active team members
-    const members = await memberRepo.findAll(orgId);
+  return members
+    .filter((m) => m.roles.some((r) => r.can_be_assigned_tasks) || m.roles.length === 0)
+    .map((m) => ({
+      memberId:      m.memberId,
+      name:          m.name,
+      roles:         m.roles.filter((r) => r.role_type === 'technical').map((r) => r.name),
+      roleSlugs:     m.roles.filter((r) => r.role_type === 'technical').map((r) => r.slug),
+      currentTasks:  taskCounts[m.memberId] || 0,
+      capacityLabel: getCapacityLabel(taskCounts[m.memberId] || 0),
+    }));
+}
 
-    // Get active sprint for task count lookup
-    const activeSprint = await sprintRepo.getActiveSprint(orgId);
-
-    // Build member list with current task counts
-    const teamMembers = await Promise.all(
-      members.map(async (m) => {
-        let currentTaskCount = 0;
-        if (activeSprint) {
-          const tasks = await taskRepo.findBySprintAndAssignee(activeSprint.id, m.id);
-          currentTaskCount = tasks.length;
-        }
-        return {
-          id:               m.id,
-          name:             m.name,
-          currentTaskCount,
-        };
-      })
-    );
-
-    const totalWorkingDays = sprintPlanningService.countWorkingDays(startDate, endDate);
-
-    const suggestedTasks = await sprintPlanningService.breakdownSprintGoal(
-      goalText,
-      sprintName,
-      startDate,
-      endDate,
-      teamMembers,
-    );
-
-    // Build capacity scores
-    const teamCapacity = teamMembers.map((m) => {
-      const capacityScore = Math.max(0, Math.min(100,
-        100
-        - (m.currentTaskCount * 15)
-      ));
-      return {
-        memberId:      m.id,
-        name:          m.name,
-        currentTasks:  m.currentTaskCount,
-        capacityScore,
+function buildAssignmentSummary(tasks) {
+  const byMember = {};
+  for (const task of tasks) {
+    if (!task.suggestedAssigneeName) continue;
+    if (!byMember[task.suggestedAssigneeName]) {
+      byMember[task.suggestedAssigneeName] = {
+        name:  task.suggestedAssigneeName,
+        tasks: [],
       };
+    }
+    byMember[task.suggestedAssigneeName].tasks.push({
+      title:    task.title,
+      domain:   task.domain,
+      priority: task.priority,
+      dueDate:  task.suggestedDueDate,
     });
+  }
 
-    return res.json({
+  const unassigned = tasks.filter((t) => !t.suggestedAssigneeName);
+
+  return {
+    byMember:   Object.values(byMember).sort((a, b) => b.tasks.length - a.tasks.length),
+    unassigned: unassigned.map((t) => ({
+      title:                   t.title,
+      domain:                  t.domain,
+      requiresManualAssignment: t.requiresManualAssignment,
+    })),
+  };
+}
+
+// ─── POST /api/sprint-planning/breakdown ─────────────────────────────────────
+
+router.post('/breakdown', async (req, res) => {
+  const { goalText, sprintName, startDate, endDate, projectId } = req.body;
+
+  if (!goalText || !sprintName || !startDate || !endDate) {
+    return res.status(400).json({
+      error: 'Missing required fields: goalText, sprintName, startDate, endDate',
+    });
+  }
+
+  const orgId = ORG_ID();
+
+  try {
+    const tasks = await sprintPlanningService.breakdownSprintGoal(
+      goalText, sprintName, startDate, endDate, orgId, projectId || null
+    );
+
+    // Extract and remove the warning flag if present
+    const heavyWarning = tasks._warning || null;
+    if (tasks._warning) delete tasks._warning;
+
+    const [workloadSnapshot] = await Promise.all([
+      buildWorkloadSnapshot(orgId),
+    ]);
+
+    const assignmentSummary = buildAssignmentSummary(tasks);
+    const totalWorkingDays  = sprintPlanningService.countWorkingDays(startDate, endDate);
+
+    const response = {
       sprintName,
       startDate,
       endDate,
       totalWorkingDays,
-      suggestedTasks,
-      teamCapacity,
-    });
+      suggestedTasks:   tasks,
+      workloadSnapshot,
+      assignmentSummary,
+      // Keep teamCapacity for backward compat with existing UI code
+      teamCapacity: workloadSnapshot.map((m) => ({
+        memberId:      m.memberId,
+        name:          m.name,
+        currentTasks:  m.currentTasks,
+        capacityScore: Math.max(0, 100 - m.currentTasks * 15),
+      })),
+    };
+
+    if (heavyWarning) response.warning = heavyWarning;
+
+    return res.json(response);
   } catch (err) {
     console.error('[POST /sprint-planning/breakdown]', err.message);
-    const status = err.message.includes('AI breakdown failed') ? 500 : 500;
-    return res.status(status).json({ error: err.message });
+
+    if (err.message.includes('No team members with technical roles')) {
+      return res.status(400).json({ error: err.message });
+    }
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// ─── POST /api/sprint-planning/create ───────────────────────────────────────
-// Called after team lead reviews and approves the plan.
-// Body: { sprintName, startDate, endDate, goalText, tasks, assignments }
+// ─── POST /api/sprint-planning/create ────────────────────────────────────────
+
 router.post('/create', async (req, res) => {
+  const { sprintName, startDate, endDate, goalText, tasks, assignments } = req.body;
+
+  if (!sprintName || !startDate || !endDate || !goalText || !Array.isArray(tasks)) {
+    return res.status(400).json({
+      error: 'Missing required fields: sprintName, startDate, endDate, goalText, tasks',
+    });
+  }
+
   try {
-    const { sprintName, startDate, endDate, goalText, tasks, assignments } = req.body;
-
-    if (!sprintName || !startDate || !endDate || !goalText || !Array.isArray(tasks)) {
-      return res.status(400).json({
-        error: 'Missing required fields: sprintName, startDate, endDate, goalText, tasks',
-      });
-    }
-
     const result = await sprintPlanningService.createSprintFromPlan(
       { name: sprintName, startDate, endDate, goalText },
       tasks,
       assignments || {},
     );
-
     return res.json(result);
   } catch (err) {
     console.error('[POST /sprint-planning/create]', err.message);
@@ -113,13 +150,19 @@ router.post('/create', async (req, res) => {
     if (err.message.includes('Manage Sprints permission')) {
       return res.status(403).json({ error: err.message });
     }
-
+    if (err.validationErrors) {
+      return res.status(400).json({
+        error:    err.message,
+        errors:   err.validationErrors,
+        warnings: err.validationWarnings || [],
+      });
+    }
     return res.status(500).json({ error: err.message });
   }
 });
 
-// ─── GET /api/sprint-planning/capacity ──────────────────────────────────────
-// Returns current team capacity for assignment decisions.
+// ─── GET /api/sprint-planning/capacity ───────────────────────────────────────
+
 router.get('/capacity', async (req, res) => {
   try {
     const orgId        = ORG_ID();
@@ -128,18 +171,16 @@ router.get('/capacity', async (req, res) => {
 
     const result = await Promise.all(
       members.map(async (m) => {
-        let currentSprintTasks   = 0;
-        let completionRateLast   = 0;
-        let avgTasksPerSprint    = 0;
-        let isOnLeave            = false;
+        let currentSprintTasks    = 0;
+        let completionRateLast    = 0;
+        let avgTasksPerSprint     = 0;
+        let isOnLeave             = false;
 
-        // Current sprint task count
         if (activeSprint) {
           const tasks = await taskRepo.findBySprintAndAssignee(activeSprint.id, m.id);
           currentSprintTasks = tasks.length;
         }
 
-        // Last sprint completion rate from sprint summary
         try {
           const summary = await statsRepo.getSprintSummary(m.id, activeSprint?.id);
           if (summary) {
@@ -148,7 +189,6 @@ router.get('/capacity', async (req, res) => {
           }
         } catch { /* non-fatal */ }
 
-        // Zoho leave check
         if (zohoService.isConfigured()) {
           try {
             const today = new Date().toISOString().split('T')[0];
@@ -158,20 +198,17 @@ router.get('/capacity', async (req, res) => {
         }
 
         const capacityScore = Math.max(0, Math.min(100,
-          100
-          - (currentSprintTasks * 15)
-          + (completionRateLast / 10)
-          - (isOnLeave ? 100 : 0)
+          100 - (currentSprintTasks * 15) + (completionRateLast / 10) - (isOnLeave ? 100 : 0)
         ));
 
         return {
-          id:                      m.id,
-          name:                    m.name,
+          id:                       m.id,
+          name:                     m.name,
           currentSprintTasks,
           completionRateLastSprint: completionRateLast,
           avgTasksPerSprint,
           isOnLeave,
-          capacityScore:           Math.round(capacityScore),
+          capacityScore:            Math.round(capacityScore),
         };
       })
     );

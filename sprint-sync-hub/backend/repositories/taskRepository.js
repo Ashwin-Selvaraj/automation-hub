@@ -122,4 +122,24 @@ async function countByStatus(sprintId, assigneeId) {
   }
 }
 
-module.exports = { upsertTask, findByJiraKey, findBySprintAndAssignee, markCompleted, getOverdueTasks, countByStatus };
+async function getActiveTaskCountsPerMember(organisationId) {
+  try {
+    const { rows } = await db.query(
+      `SELECT assignee_id, COUNT(*) AS task_count
+       FROM tasks
+       WHERE organisation_id = $1
+         AND LOWER(status) NOT IN ('done', 'closed', 'resolved', 'complete', 'completed')
+         AND assignee_id IS NOT NULL
+       GROUP BY assignee_id`,
+      [organisationId]
+    );
+    const counts = {};
+    for (const row of rows) counts[row.assignee_id] = parseInt(row.task_count, 10);
+    return counts;
+  } catch (err) {
+    console.error('[taskRepository.getActiveTaskCountsPerMember]', err.message);
+    throw err;
+  }
+}
+
+module.exports = { upsertTask, findByJiraKey, findBySprintAndAssignee, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember };
