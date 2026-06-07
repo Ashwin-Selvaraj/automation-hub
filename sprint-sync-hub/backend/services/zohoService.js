@@ -256,23 +256,41 @@ async function getTodayAttendance(employeeEmail) {
   const c     = getConfig();
   const today = getTodayDateString();
 
+  // Zoho People accepts different date formats depending on account settings.
+  // Build the date string in all formats we'll try.
+  const dateParts = today.split('-'); // ['2026', '06', '07']
+  const dateMMDDYYYY = `${dateParts[1]}-${dateParts[2]}-${dateParts[0]}`; // MM-DD-YYYY
+  const dateDDMMYYYY = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
+
   const endpoints = [
-    // Primary: zohoapis.in (the account's stated API domain)
+    // Primary: zohoapis.in with YYYY-MM-DD
     {
-      label:  'zohoapis',
+      label:  'zohoapis-iso',
       url:    `https://${c.apiHost}/people/api/attendance/getAttendance`,
       params: { empId: employeeEmail, startDate: today, endDate: today, dateFormat: 'yyyy-MM-dd' },
     },
-    // Fallback 1: people.zoho.in with dateFormat
+    // people.zoho.in with YYYY-MM-DD
     {
-      label:  'people-with-fmt',
+      label:  'people-iso',
       url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
       params: { empId: employeeEmail, startDate: today, endDate: today, dateFormat: 'yyyy-MM-dd' },
     },
-    // Fallback 2: people.zoho.in without dateFormat
+    // people.zoho.in with MM-DD-YYYY (common Zoho default)
     {
-      label:  'people-no-fmt',
+      label:  'people-mmddyyyy',
       url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: dateMMDDYYYY, endDate: dateMMDDYYYY },
+    },
+    // people.zoho.in with DD-MM-YYYY
+    {
+      label:  'people-ddmmyyyy',
+      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
+      params: { empId: employeeEmail, startDate: dateDDMMYYYY, endDate: dateDDMMYYYY },
+    },
+    // zohoapis.in with no dateFormat param (let Zoho use its account default)
+    {
+      label:  'zohoapis-no-fmt',
+      url:    `https://${c.apiHost}/people/api/attendance/getAttendance`,
       params: { empId: employeeEmail, startDate: today, endDate: today },
     },
   ];
@@ -286,6 +304,14 @@ async function getTodayAttendance(employeeEmail) {
         },
         params:  ep.params,
         timeout: 10_000,
+      });
+
+      // Always log the raw response so we can see what Zoho is returning
+      zohoLog('INFO', 'Raw Zoho response', {
+        endpoint: ep.label,
+        email:    employeeEmail,
+        params:   ep.params,
+        rawSample: JSON.stringify(response.data).substring(0, 400),
       });
 
       const parsed = parseAttendanceResponse(response.data, `${ep.label}:${employeeEmail}`);
@@ -306,18 +332,17 @@ async function getTodayAttendance(employeeEmail) {
       zohoLog('WARN', 'Endpoint failed', { endpoint: ep.label, email: employeeEmail, status, detail: detail.substring(0, 200) });
 
       if (status === 401) {
-        // Token expired — invalidate cache and try to refresh once
         cachedToken = null;
         try { token = await getAccessToken(); } catch (_) {}
       }
       if (status === 403) {
         zohoLog('ERROR', '403 Forbidden — check API scopes in Zoho developer console', { email: employeeEmail });
-        return defaultResult; // No point trying more endpoints
+        return defaultResult;
       }
     }
   }
 
-  zohoLog('WARN', 'All attendance endpoints failed', { email: employeeEmail, date: today });
+  zohoLog('WARN', 'All attendance endpoints exhausted', { email: employeeEmail, date: today });
   return defaultResult;
 }
 

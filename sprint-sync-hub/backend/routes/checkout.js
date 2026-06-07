@@ -114,7 +114,7 @@ router.get('/status/today', async (req, res) => {
     };
 
     res.json({
-      date,
+      date: today,
       fetchedLiveFromZoho: zohoService.isConfigured(),
       members: memberRows,
       summary,

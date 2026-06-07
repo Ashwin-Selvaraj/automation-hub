@@ -296,4 +296,71 @@ router.get('/zoho', async (req, res) => {
   return res.json(report);
 });
 
+// ─── GET /api/debug/zoho/raw?email=xxx ────────────────────────────────────────
+// Returns the raw Zoho API response for a single member using all date format variants.
+// Useful for diagnosing response shape without restarting the server.
+
+router.get('/zoho/raw', async (req, res) => {
+  const email = req.query.email || null;
+  if (!email) {
+    // Default to first member with email
+    try {
+      const { query } = require('../db');
+      const r = await query('SELECT email, name FROM members WHERE email IS NOT NULL LIMIT 1');
+      if (!r.rows.length) return res.status(400).json({ error: 'No email provided and no members with email in DB' });
+      return res.redirect(`/api/debug/zoho/raw?email=${encodeURIComponent(r.rows[0].email)}`);
+    } catch (e) {
+      return res.status(400).json({ error: 'Provide ?email=someone@company.com' });
+    }
+  }
+
+  let token;
+  try {
+    const zohoService = require('../services/zohoService');
+    token = await zohoService.getAccessToken();
+  } catch (err) {
+    return res.status(500).json({ error: `Token refresh failed: ${err.message}` });
+  }
+
+  const axios   = require('axios');
+  const domain  = process.env.ZOHO_DOMAIN || 'zoho.in';
+  const tld     = domain.includes('.') ? domain.substring(domain.indexOf('.')) : '.in';
+  const today   = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const parts        = today.split('-');
+  const dateMMDDYYYY = `${parts[1]}-${parts[2]}-${parts[0]}`;
+  const dateDDMMYYYY = `${parts[2]}-${parts[1]}-${parts[0]}`;
+
+  const results = [];
+  const variants = [
+    { label: 'zohoapis.in YYYY-MM-DD', url: `https://www.zohoapis${tld}/people/api/attendance/getAttendance`, params: { empId: email, startDate: today,        endDate: today,        dateFormat: 'yyyy-MM-dd' } },
+    { label: 'people.zoho.in YYYY-MM-DD', url: `https://people.${domain}/people/api/attendance/getAttendance`, params: { empId: email, startDate: today,        endDate: today,        dateFormat: 'yyyy-MM-dd' } },
+    { label: 'people.zoho.in MM-DD-YYYY', url: `https://people.${domain}/people/api/attendance/getAttendance`, params: { empId: email, startDate: dateMMDDYYYY, endDate: dateMMDDYYYY } },
+    { label: 'people.zoho.in DD-MM-YYYY', url: `https://people.${domain}/people/api/attendance/getAttendance`, params: { empId: email, startDate: dateDDMMYYYY, endDate: dateDDMMYYYY } },
+    { label: 'zohoapis.in no-fmt',        url: `https://www.zohoapis${tld}/people/api/attendance/getAttendance`, params: { empId: email, startDate: today,        endDate: today } },
+  ];
+
+  for (const v of variants) {
+    try {
+      const r = await axios.get(v.url, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        params:  v.params,
+        timeout: 10_000,
+      });
+      results.push({ label: v.label, params: v.params, status: r.status, data: r.data });
+    } catch (err) {
+      results.push({
+        label:  v.label,
+        params: v.params,
+        status: err.response?.status || 'network_error',
+        data:   err.response?.data || err.message,
+      });
+    }
+  }
+
+  return res.json({ email, today, results });
+});
+
 module.exports = router;
