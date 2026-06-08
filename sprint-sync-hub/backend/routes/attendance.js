@@ -1,127 +1,116 @@
 'use strict';
 
-const express       = require('express');
-const router        = express.Router();
-const zohoService   = require('../services/zohoService');
-const configService = require('../services/configService');
-const memberRepo    = require('../repositories/memberRepository');
+/**
+ * Attendance routes — mounted at /api/attendance in server.js.
+ *
+ * All reads go through attendanceService which tries:
+ *   Zoho API → Zoho Webhook → Slack first message
+ */
 
-function today() {
-  return new Date().toISOString().split('T')[0];
-}
+const express           = require('express');
+const router            = express.Router();
+const attendanceService = require('../services/attendanceService');
 
-// ─── GET /api/attendance/today ─────────────────────────────────────────────────
-// Who is in, who is absent, who is on leave — right now.
+const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
+
+// ─── GET /api/attendance/today ────────────────────────────────────────────────
+// Returns today's attendance using the best available data source.
+// Response shape is backward-compatible with the old Zoho-only route.
 
 router.get('/today', async (req, res) => {
   try {
-    if (!zohoService.isConfigured()) {
-      return res.json({ configured: false, message: 'Zoho not configured', present: [], absent: [], onLeave: [], late: [] });
-    }
+    const data = await attendanceService.getTodayAttendance(ORG_ID());
+    res.json(data);
+  } catch (err) {
+    console.error('[Attendance] GET /today error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const cfg     = configService.getSprintConfig();
-    const orgId   = parseInt(process.env.ORGANISATION_ID || '1', 10);
-    const dateStr = today();
+// ─── GET /api/attendance/source ───────────────────────────────────────────────
+// Shows which data source is currently active and the discovered endpoint.
 
-    // Prefer DB members (have email); fall back to config members
-    let members = await memberRepo.findAll(orgId);
-    if (!members.length) members = cfg.teamMembers;
-
-    const workStart = process.env.WORK_START_TIME || '09:00';
-
-    const results = await Promise.all(
-      members
-        .filter((m) => m.email || m.email_address)
-        .map(async (m) => {
-          const email = m.email || m.email_address;
-          const [att, leave] = await Promise.all([
-            zohoService.getAttendance(email, dateStr).catch(() => null),
-            zohoService.isOnLeave(email, dateStr).catch(() => ({ onLeave: false })),
-          ]);
-          const lateInfo = att?.checkedIn
-            ? await zohoService.isLateCheckIn(email, dateStr, workStart).catch(() => ({ late: false, minutesLate: 0 }))
-            : { late: false, minutesLate: 0 };
-          return { member: { id: m.slack_id || m.id, name: m.name, email }, att, leave, lateInfo };
-        })
-    );
-
-    const present  = results.filter((r) => r.att?.checkedIn && !r.leave?.onLeave);
-    const onLeave  = results.filter((r) => r.leave?.onLeave);
-    const absent   = results.filter((r) => !r.att?.checkedIn && !r.leave?.onLeave);
-    const late     = results.filter((r) => r.lateInfo?.late);
+router.get('/source', async (req, res) => {
+  try {
+    const endpoint  = await attendanceService.discoverZohoEndpoint();
+    const { query } = require('../db');
+    const cfg = await query(
+      `SELECT config_key, config_value, updated_at
+       FROM system_config WHERE organisation_id = $1`,
+      [ORG_ID()]
+    ).catch(() => ({ rows: [] }));
 
     res.json({
-      configured: true,
-      date: dateStr,
-      present:  present.map((r) => ({ ...r.member, checkInTime: r.att?.checkInTime, checkOutTime: r.att?.checkOutTime, hoursWorked: r.att?.hoursWorked })),
-      onLeave:  onLeave.map((r)  => ({ ...r.member, leaveType: r.leave?.leaveType, reason: r.leave?.reason })),
-      absent:   absent.map((r)   => ({ ...r.member })),
-      late:     late.map((r)     => ({ ...r.member, checkInTime: r.att?.checkInTime, minutesLate: r.lateInfo?.minutesLate })),
-      summary: { total: results.length, present: present.length, onLeave: onLeave.length, absent: absent.length, late: late.length },
+      zohoApiEndpoint: endpoint || null,
+      zohoApiWorking:  !!endpoint,
+      configCache:     cfg.rows,
+      activeSources: [
+        endpoint        ? '1. zoho_api (primary)'                    : null,
+        '2. zoho_webhook (real-time if webhook is configured)',
+        '3. slack_presence (always available — first message of day)',
+      ].filter(Boolean),
+      webhookSetupUrl: '/api/webhooks/zoho-attendance',
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ─── GET /api/attendance/member/:memberId ─────────────────────────────────────
-// One member's attendance for a specific date (default: today).
+// ─── POST /api/attendance/refresh-source ─────────────────────────────────────
+// Force re-probe of Zoho endpoints (clears cached discovery result).
 
-router.get('/member/:memberId', async (req, res) => {
+router.post('/refresh-source', async (req, res) => {
   try {
-    if (!zohoService.isConfigured()) {
-      return res.json({ configured: false });
-    }
-
-    const orgId    = parseInt(process.env.ORGANISATION_ID || '1', 10);
-    const dateStr  = req.query.date || today();
-    const members  = await memberRepo.findAll(orgId);
-    const member   = members.find((m) => String(m.id) === req.params.memberId || m.slack_id === req.params.memberId);
-
-    if (!member || !member.email) {
-      return res.status(404).json({ error: 'Member not found or has no email address for Zoho lookup' });
-    }
-
-    const workStart = process.env.WORK_START_TIME || '09:00';
-    const [att, leave, lateInfo] = await Promise.all([
-      zohoService.getAttendance(member.email, dateStr),
-      zohoService.isOnLeave(member.email, dateStr),
-      zohoService.getAttendance(member.email, dateStr).then((a) =>
-        a?.checkedIn ? zohoService.isLateCheckIn(member.email, dateStr, workStart) : { late: false, minutesLate: 0 }
-      ),
-    ]);
-
-    res.json({ configured: true, date: dateStr, member: { id: member.id, name: member.name, email: member.email }, att, leave, lateInfo });
+    attendanceService.resetEndpointCache();
+    const { query } = require('../db');
+    await query(
+      `DELETE FROM system_config
+       WHERE organisation_id = $1 AND config_key = 'zoho_attendance_endpoint'`,
+      [ORG_ID()]
+    ).catch(() => {});
+    const endpoint = await attendanceService.discoverZohoEndpoint();
+    res.json({
+      probeComplete:   true,
+      zohoApiEndpoint: endpoint || null,
+      zohoApiWorking:  !!endpoint,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ─── GET /api/attendance/late-today ──────────────────────────────────────────
+// ─── GET /api/attendance/history?days=7 ──────────────────────────────────────
+
+router.get('/history', async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days || '7', 10), 90);
+    const data = await attendanceService.getTeamAttendanceHistory(ORG_ID(), days);
+    res.json({ days, records: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/attendance/member/:memberId?days=30 ─────────────────────────────
+
+router.get('/member/:memberId', async (req, res) => {
+  try {
+    const memberId = parseInt(req.params.memberId, 10);
+    const days     = Math.min(parseInt(req.query.days || '30', 10), 90);
+    if (isNaN(memberId)) return res.status(400).json({ error: 'Invalid memberId' });
+    const data = await attendanceService.getMemberAttendanceHistory(memberId, days);
+    res.json({ memberId, days, records: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/attendance/late-today ───────────────────────────────────────────
 
 router.get('/late-today', async (req, res) => {
   try {
-    if (!zohoService.isConfigured()) {
-      return res.json({ configured: false, late: [] });
-    }
-
-    const orgId     = parseInt(process.env.ORGANISATION_ID || '1', 10);
-    const dateStr   = today();
-    const workStart = process.env.WORK_START_TIME || '09:00';
-    const members   = await memberRepo.findAll(orgId);
-
-    const results = await Promise.all(
-      members
-        .filter((m) => m.email)
-        .map(async (m) => {
-          const lateInfo = await zohoService.isLateCheckIn(m.email, dateStr, workStart).catch(() => ({ late: false, minutesLate: 0 }));
-          if (!lateInfo.late) return null;
-          const att = await zohoService.getAttendance(m.email, dateStr).catch(() => null);
-          return { member: { id: m.slack_id || m.id, name: m.name, email: m.email }, checkInTime: att?.checkInTime, minutesLate: lateInfo.minutesLate };
-        })
-    );
-
-    res.json({ configured: true, date: dateStr, late: results.filter(Boolean) });
+    const data = await attendanceService.getTodayAttendance(ORG_ID());
+    res.json({ configured: true, date: data.date, late: data.late, total: data.late.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

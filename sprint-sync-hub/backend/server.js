@@ -35,6 +35,7 @@ app.use('/api/assignment',     require('./routes/assignment'));
 app.use('/api/mismatch',      require('./routes/mismatch'));
 app.use('/api/roles',         require('./routes/roles'));
 app.use('/api/members',       require('./routes/members'));
+app.use('/api/webhooks',      require('./routes/webhooks'));
 
 // Diagnostic routes — only available in non-production environments
 if (process.env.NODE_ENV !== 'production') {
@@ -171,6 +172,23 @@ async function boot() {
       console.warn('[Startup] ⚠ NO MEMBERS HAVE JIRA IDs — sprint planning assignment will be unassigned.');
       console.warn('[Startup]   Run POST /api/members/sync-all to fix this.');
     }
+  } catch (_) { /* non-fatal */ }
+
+  // 6f. Discover Zoho attendance endpoint in the background (non-blocking)
+  try {
+    const attendanceService = require('./services/attendanceService');
+    attendanceService.discoverZohoEndpoint()
+      .then(endpoint => {
+        if (endpoint) {
+          console.log(`[Startup] ✅ Zoho attendance API working: ${endpoint}`);
+        } else {
+          console.log('[Startup] Zoho attendance API not available — Slack fallback active');
+          console.log('[Startup]   To enable real-time attendance: configure Zoho webhook');
+          console.log('[Startup]   Zoho People → Settings → Integrations → Webhooks');
+          console.log('[Startup]   Webhook URL: /api/webhooks/zoho-attendance');
+        }
+      })
+      .catch(err => console.warn('[Startup] Endpoint discovery error:', err.message));
   } catch (_) { /* non-fatal */ }
 
   // 7. Start Express

@@ -526,41 +526,106 @@ export default function OverviewTab({ config, navigate }) {
           display: 'flex', alignItems: 'center', gap: 10,
           fontSize: 12, color: '#92400E', fontFamily: 'inherit',
         }}>
-          <span>⚠ Zoho attendance unavailable: {attendanceError}</span>
-          <a
-            href="/api/debug/zoho"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: '#2563EB', fontSize: 11, textDecoration: 'underline', whiteSpace: 'nowrap' }}
-          >
+          <span>⚠ Attendance unavailable: {attendanceError}</span>
+          <a href="/api/debug/zoho" target="_blank" rel="noopener noreferrer"
+            style={{ color: '#2563EB', fontSize: 11, textDecoration: 'underline', whiteSpace: 'nowrap' }}>
             Run diagnostic →
           </a>
         </div>
       )}
 
-      {/* Attendance row (Zoho) — only shown when Zoho is configured */}
+      {/* Attendance section — always shown (uses Slack fallback if Zoho unavailable) */}
       {attendance?.configured && (
         <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: colors.gray400, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-            Attendance Today
+          {/* Header row with source badge */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: colors.gray400, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Attendance Today
+            </div>
+            {attendance.source && (
+              <span style={{
+                fontSize: 10, fontWeight: 600, fontFamily: fonts.mono,
+                padding: '2px 8px', borderRadius: 100,
+                ...(attendance.source === 'zoho_api'
+                  ? { background: '#F0FDF4', color: '#16A34A', border: '1px solid #BBF7D0' }
+                  : attendance.source === 'zoho_webhook'
+                  ? { background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE' }
+                  : attendance.source === 'mixed'
+                  ? { background: '#F9FAFB', color: '#6B7280', border: '1px solid #E5E7EB' }
+                  : { background: '#FFFBEB', color: '#D97706', border: '1px solid #FDE68A' } // slack_presence
+                ),
+              }}>
+                {attendance.source === 'zoho_api'       ? '● Zoho API'
+                : attendance.source === 'zoho_webhook'  ? '● Zoho Live'
+                : attendance.source === 'mixed'         ? '● Mixed sources'
+                : '● Slack Activity'}
+              </span>
+            )}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+
+          {/* Summary metric cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
             {[
-              { id: 'present', label: 'Present',   value: attendance.summary?.present  ?? 0, tint: colors.tintGreen,  members: attendance.present  || [] },
-              { id: 'leave',   label: 'On Leave',  value: attendance.summary?.onLeave  ?? 0, tint: { bg: colors.gray50, border: colors.gray200, text: colors.gray500 }, members: attendance.onLeave || [] },
-              { id: 'absent',  label: 'Absent',    value: attendance.summary?.absent   ?? 0, tint: colors.tintRed,    members: attendance.absent   || [] },
-              { id: 'late',    label: 'Late Today', value: attendance.summary?.late    ?? 0, tint: colors.tintAmber,  members: attendance.late     || [] },
+              { id: 'present', label: 'Present',    value: attendance.summary?.present ?? 0, tint: colors.tintGreen,  members: attendance.present  || [] },
+              { id: 'leave',   label: 'On Leave',   value: attendance.summary?.onLeave ?? 0, tint: { bg: colors.gray50, border: colors.gray200, text: colors.gray500 }, members: attendance.onLeave || [] },
+              { id: 'absent',  label: 'Absent',     value: attendance.summary?.absent  ?? 0, tint: colors.tintRed,    members: attendance.absent   || [] },
+              { id: 'late',    label: 'Late Today',  value: attendance.summary?.late   ?? 0, tint: colors.tintAmber,  members: attendance.late     || [] },
             ].map((m) => (
-              <MetricCard
-                key={m.id}
-                label={m.label}
-                value={m.value}
-                loading={loading}
-                tint={m.tint}
-                onClick={!loading ? () => setPopup(m.id) : undefined}
-              />
+              <MetricCard key={m.id} label={m.label} value={m.value} loading={loading}
+                tint={m.tint} onClick={!loading ? () => setPopup(m.id) : undefined} />
             ))}
           </div>
+
+          {/* Present / Absent two-column list */}
+          {(attendance.present?.length > 0 || attendance.absent?.length > 0) && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {/* Present */}
+              <div style={{
+                background: '#F0FDF4', border: '1px solid #BBF7D0',
+                borderRadius: 8, padding: '10px 14px',
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#15803D', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Present ({attendance.present?.length ?? 0})
+                </div>
+                {(attendance.present || []).map((m) => (
+                  <div key={m.memberId || m.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16A34A', flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontWeight: 500, color: colors.gray800, fontFamily: fonts.body, flex: 1 }}>{m.name}</span>
+                    {m.checkInTime && (
+                      <span style={{ color: colors.gray400, fontFamily: fonts.mono, fontSize: 11 }}>
+                        {m.checkInTime}
+                        {m.isLate && (
+                          <span title={`Late by ${m.lateByMinutes} min`} style={{ color: '#D97706', marginLeft: 3 }}>⚠</span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {(attendance.present || []).length === 0 && (
+                  <div style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body }}>No check-ins yet</div>
+                )}
+              </div>
+
+              {/* Absent */}
+              <div style={{
+                background: '#FEF2F2', border: '1px solid #FECACA',
+                borderRadius: 8, padding: '10px 14px',
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#DC2626', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Absent ({attendance.absent?.length ?? 0})
+                </div>
+                {(attendance.absent || []).map((m) => (
+                  <div key={m.memberId || m.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#D1D5DB', flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ color: colors.gray500, fontFamily: fonts.body }}>{m.name}</span>
+                  </div>
+                ))}
+                {(attendance.absent || []).length === 0 && (
+                  <div style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body }}>Everyone is in 🎉</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -515,6 +515,24 @@ export default function HowItWorksTab() {
           <AdminP>Available settings: timezone, daily sync time (default 10:00 AM), EOD check time (default 6:30 PM), weekly report day (default Friday), report time (default 5:00 PM), and manager Slack ID for report DMs.</AdminP>
         </Accordion>
 
+        <Accordion icon="📍" title="Setting up real-time attendance (Zoho Webhook)">
+          <AdminP>By default, attendance falls back to Slack activity (first message of the day = present). For accurate check-in times, configure the Zoho People webhook — a one-time 3-minute setup.</AdminP>
+          <AdminP><strong>How it works:</strong> Zoho pushes a POST request to your backend the moment someone checks in or out on the mobile app or web portal. No API polling needed.</AdminP>
+          <AdminP><strong>Step-by-step:</strong></AdminP>
+          <AdminP>1 → Log into <strong>Zoho People as Administrator</strong></AdminP>
+          <AdminP>2 → Go to: <InlineCode>Settings → Integrations → Webhooks</InlineCode></AdminP>
+          <AdminP>3 → Click <strong>Add Webhook</strong> and fill in:</AdminP>
+          <AdminP style={{ paddingLeft: 16 }}>
+            Name: <InlineCode>Sprint-Sync Hub — Check In</InlineCode><br />
+            Event: <InlineCode>Attendance → Check In</InlineCode><br />
+            URL: <InlineCode>https://your-backend-url/api/webhooks/zoho-attendance</InlineCode><br />
+            Method: <InlineCode>POST</InlineCode> · Format: <InlineCode>JSON</InlineCode>
+          </AdminP>
+          <AdminP>4 → Save, then repeat for the <strong>Check Out</strong> event</AdminP>
+          <AdminP>5 → Test by checking in on the Zoho People mobile app. Server logs should show: <InlineCode>[Webhook] ✓ Your Name: checkIn at HH:MM</InlineCode></AdminP>
+          <AdminP>Once configured, the attendance section on the Overview page will show <strong>"● Zoho Live"</strong> as the source badge. The Slack fallback still runs for any team member not in Zoho.</AdminP>
+        </Accordion>
+
         <Accordion icon="🏃" title="Starting a new sprint">
           <AdminP>Go to the <strong>Sprint</strong> tab. Update the sprint name, start date, and duration. The system creates a new sprint record in the database and all new standup posts, stats, and performance scores will be associated with it.</AdminP>
           <AdminP>Previous sprint data is retained and viewable in each member's performance history (last 5 sprints shown in the profile drawer).</AdminP>
