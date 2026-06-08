@@ -10,19 +10,93 @@
 const express           = require('express');
 const router            = express.Router();
 const attendanceService = require('../services/attendanceService');
+const zohoService       = require('../services/zohoService');
 
 const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
 
 // ─── GET /api/attendance/today ────────────────────────────────────────────────
-// Returns today's attendance using the best available data source.
-// Response shape is backward-compatible with the old Zoho-only route.
+// Returns real-time presence via Zoho Chat API (/_chat/v2/users).
+// Falls back gracefully if Zoho is unavailable.
 
 router.get('/today', async (req, res) => {
   try {
-    const data = await attendanceService.getTodayAttendance(ORG_ID());
-    res.json(data);
+    const organisationId = ORG_ID();
+    const attendance     = await zohoService.getAllTodayAttendance(organisationId);
+
+    const present   = attendance.filter(m => m.isPresent);
+    const absent    = attendance.filter(m => !m.isPresent);
+    const unmatched = attendance.filter(m => m.matchedBy === 'none');
+
+    res.json({
+      configured: true,
+      date:       new Date().toISOString().split('T')[0],
+      source:     'zoho_presence',
+      present:    present.map(m => ({
+        id:            m.memberId,
+        memberId:      m.memberId,
+        name:          m.name,
+        email:         m.email,
+        slackUserId:   m.slackUserId,
+        status:        m.presenceStatus,
+        statusMessage: m.statusMessage,
+        matchedBy:     m.matchedBy,
+        department:    m.department,
+        zohoName:      m.zohoName,
+      })),
+      absent: absent.map(m => ({
+        id:        m.memberId,
+        memberId:  m.memberId,
+        name:      m.name,
+        email:     m.email,
+        reason:    m.matchedBy === 'none' ? 'No Zoho account matched' : 'Offline in Zoho',
+        matchedBy: m.matchedBy,
+      })),
+      onLeave:  [],
+      late:     [],
+      summary: {
+        total:     attendance.length,
+        present:   present.length,
+        absent:    absent.length,
+        onLeave:   0,
+        late:      0,
+        unmatched: unmatched.length,
+      },
+    });
   } catch (err) {
-    console.error('[Attendance] GET /today error:', err.message);
+    console.error('[Attendance] /today failed:', err.message);
+    res.status(500).json({
+      error:    err.message,
+      configured: false,
+      present:  [],
+      absent:   [],
+      onLeave:  [],
+      late:     [],
+      summary:  { total: 0, present: 0, absent: 0 },
+    });
+  }
+});
+
+// ─── GET /api/zoho/presence ───────────────────────────────────────────────────
+// Debug: raw presence data for all Zoho org members.
+
+router.get('/zoho/presence', async (req, res) => {
+  try {
+    const users = await zohoService.getAllUsersWithPresence();
+    res.json({
+      total:   users.length,
+      present: users.filter(u => u.isPresent).length,
+      offline: users.filter(u => !u.isPresent).length,
+      members: users.map(u => ({
+        name:       u.fullName,
+        email:      u.email,
+        iamuid:     u.iamuid,
+        employeeId: u.employeeId,
+        present:    u.isPresent,
+        status:     u.presenceStatus,
+        message:    u.statusMessage,
+      })),
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

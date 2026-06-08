@@ -174,7 +174,18 @@ async function boot() {
     }
   } catch (_) { /* non-fatal */ }
 
-  // 6f. Discover Zoho attendance endpoint in the background (non-blocking)
+  // 6f. Clear cached broken Zoho attendance endpoint (switching to presence API)
+  try {
+    const { query } = require('./db');
+    await query(
+      `DELETE FROM system_config
+       WHERE organisation_id = $1 AND config_key = 'zoho_attendance_endpoint'`,
+      [parseInt(process.env.ORGANISATION_ID || '1')]
+    );
+    console.log('[Startup] Cleared stale Zoho attendance endpoint cache');
+  } catch (_) { /* non-fatal — table may not exist yet */ }
+
+  // 6h. Run attendance endpoint discovery in background (will use presence API now)
   try {
     const attendanceService = require('./services/attendanceService');
     attendanceService.discoverZohoEndpoint()

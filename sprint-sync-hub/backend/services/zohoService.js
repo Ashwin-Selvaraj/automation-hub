@@ -287,208 +287,242 @@ function parseAttendanceResponse(data, contextLabel) {
   return null;
 }
 
-// ─── Core API function ────────────────────────────────────────────────────────
+// ─── Presence API (/_chat/v2/users) ──────────────────────────────────────────
 
 /**
- * Fetch today's attendance for a single employee.
- * Tries multiple endpoint variants until one succeeds.
- * Never throws — returns a safe default on any failure.
+ * Fetch all Zoho organisation members with real-time presence data.
+ * Uses /_chat/v2/users — confirmed working on this account.
+ * Handles has_more pagination automatically.
+ *
+ * Required scope: ZohoCliq.users.READ (in addition to People scopes)
+ *
+ * @returns {Promise<Array<{
+ *   iamuid: string, email: string, fullName: string,
+ *   firstName: string, lastName: string, employeeId: string,
+ *   department: string, designation: string,
+ *   isPresent: boolean, presenceStatus: string,
+ *   statusMessage: string, rawPresence: object
+ * }>>}
  */
-async function getTodayAttendance(employeeEmail) {
-  const defaultResult = {
-    checkedIn: false, checkInTime: null,
-    checkedOut: false, checkOutTime: null,
-    hoursWorked: null, status: 'No Record',
-  };
+async function getAllUsersWithPresence() {
+  const token = await getAccessToken();
+  const all   = [];
 
-  if (!employeeEmail) {
-    zohoLog('WARN', 'getTodayAttendance called with no email');
-    return defaultResult;
-  }
+  // Zoho returns all users in one call for small orgs (has_more=false).
+  // If has_more=true, Zoho Chat uses a cursor in the next_token field.
+  let nextToken = null;
 
-  let token;
-  try {
-    token = await getAccessToken();
-  } catch (err) {
-    zohoLog('ERROR', 'getTodayAttendance: token refresh failed', { email: employeeEmail, error: err.message });
-    return defaultResult;
-  }
+  while (true) {
+    const params = { fields: 'all,presence', nocache: Date.now() };
+    if (nextToken) params.from = nextToken; // cursor for next page
 
-  const c     = getConfig();
-  const today = getTodayDateString();
+    const response = await axios.get(
+      'https://people.zoho.in/_chat/v2/users',
+      {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        params,
+        timeout: 15_000,
+      }
+    );
 
-  // Zoho People accepts different date formats depending on account settings.
-  // Build the date string in all formats we'll try.
-  const dateParts = today.split('-'); // ['2026', '06', '07']
-  const dateMMDDYYYY = `${dateParts[1]}-${dateParts[2]}-${dateParts[0]}`; // MM-DD-YYYY
-  const dateDDMMYYYY = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
-
-  const endpoints = [
-    // Primary: zohoapis.in with YYYY-MM-DD
-    {
-      label:  'zohoapis-iso',
-      url:    `https://${c.apiHost}/people/api/attendance/getAttendance`,
-      params: { empId: employeeEmail, startDate: today, endDate: today, dateFormat: 'yyyy-MM-dd' },
-    },
-    // people.zoho.in with YYYY-MM-DD
-    {
-      label:  'people-iso',
-      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
-      params: { empId: employeeEmail, startDate: today, endDate: today, dateFormat: 'yyyy-MM-dd' },
-    },
-    // people.zoho.in with MM-DD-YYYY (common Zoho default)
-    {
-      label:  'people-mmddyyyy',
-      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
-      params: { empId: employeeEmail, startDate: dateMMDDYYYY, endDate: dateMMDDYYYY },
-    },
-    // people.zoho.in with DD-MM-YYYY
-    {
-      label:  'people-ddmmyyyy',
-      url:    `https://${c.peopleHost}/people/api/attendance/getAttendance`,
-      params: { empId: employeeEmail, startDate: dateDDMMYYYY, endDate: dateDDMMYYYY },
-    },
-    // zohoapis.in with no dateFormat param (let Zoho use its account default)
-    {
-      label:  'zohoapis-no-fmt',
-      url:    `https://${c.apiHost}/people/api/attendance/getAttendance`,
-      params: { empId: employeeEmail, startDate: today, endDate: today },
-    },
-  ];
-
-  for (const ep of endpoints) {
-    try {
-      const response = await axios.get(ep.url, {
-        headers: {
-          Authorization:  `Zoho-oauthtoken ${token}`,
-          'Content-Type': 'application/json',
-        },
-        params:  ep.params,
-        timeout: 10_000,
+    const body = response.data;
+    if (!body?.data || !Array.isArray(body.data)) {
+      zohoLog('ERROR', 'Unexpected response from /_chat/v2/users', {
+        sample: JSON.stringify(body).substring(0, 300),
       });
+      break;
+    }
 
-      // Always log the raw response so we can see what Zoho is returning
-      zohoLog('INFO', 'Raw Zoho response', {
-        endpoint: ep.label,
-        email:    employeeEmail,
-        params:   ep.params,
-        rawSample: JSON.stringify(response.data).substring(0, 400),
-      });
+    const mapped = body.data.map(user => {
+      const presence = user.presence || {};
+      const st    = String(presence.st    || '0');
+      const scode = String(presence.scode || '0');
 
-      const parsed = parseAttendanceResponse(response.data, `${ep.label}:${employeeEmail}`);
-      if (parsed !== null) {
-        zohoLog('INFO', 'Attendance fetched', {
-          endpoint:  ep.label,
-          email:     employeeEmail,
-          checkedIn: parsed.checkedIn,
-          status:    parsed.status,
-        });
-        return parsed;
+      let presenceStatus = 'offline';
+      if (st === '1') {
+        if      (scode === '1') presenceStatus = 'busy';
+        else if (scode === '2') presenceStatus = 'away';
+        else                    presenceStatus = 'online';
       }
-      // parsed null = shape unrecognised, try next endpoint
 
-    } catch (err) {
-      const status = err.response?.status;
-      const detail = JSON.stringify(err.response?.data || err.message);
-      zohoLog('WARN', 'Endpoint failed', { endpoint: ep.label, email: employeeEmail, status, detail: detail.substring(0, 200) });
+      return {
+        iamuid:        String(user.iamuid || user.id || ''),
+        email:         (user.email_id || '').toLowerCase().trim(),
+        fullName:      user.full_name    || user.display_name || '',
+        firstName:     user.first_name  || '',
+        lastName:      user.last_name   || '',
+        employeeId:    user.employee_id || '',
+        department:    user.department?.name  || '',
+        designation:   user.designation?.name || '',
+        isPresent:     st === '1',
+        presenceStatus,
+        statusMessage: presence.smsg || '',
+        rawPresence:   presence,
+      };
+    });
 
-      if (status === 401) {
-        cachedToken = null;
-        try { token = await getAccessToken(); } catch (_) {}
-      }
-      if (status === 403) {
-        zohoLog('ERROR', '403 Forbidden — check API scopes in Zoho developer console', { email: employeeEmail });
-        return defaultResult;
-      }
+    all.push(...mapped);
+
+    // Paginate only if Zoho signals more data exists
+    if ((body.has_more === true || body.has_more === 'true') && body.next_token) {
+      nextToken = body.next_token;
+    } else {
+      break; // done — all users fetched
     }
   }
 
-  zohoLog('WARN', 'All attendance endpoints exhausted', { email: employeeEmail, date: today });
-  return defaultResult;
+  zohoLog('INFO', 'Presence data fetched', {
+    total:   all.length,
+    present: all.filter(u => u.isPresent).length,
+  });
+
+  return all;
 }
 
 /**
- * Get today's attendance for ALL active team members.
- * Reads members from the database (preferred) so emails are always current.
- * Processes 3 members in parallel with 300 ms gaps between batches.
+ * Get today's attendance for all DB team members by matching them to
+ * Zoho presence data. Matches by iamuid → email → first name (fallback).
+ *
+ * @param {number} organisationId
+ * @returns {Promise<Array<{
+ *   memberId: number, name: string, email: string, slackUserId: string,
+ *   isPresent: boolean, presenceStatus: string, statusMessage: string,
+ *   matchedBy: 'iamuid'|'email'|'name'|'none', zohoEmail: string|null,
+ *   zohoName: string|null, department: string|null,
+ *   checkedIn: boolean  ← alias of isPresent for backward compat
+ * }>>}
  */
-async function getAllTodayAttendance() {
+async function getAllTodayAttendance(organisationId) {
   if (!isConfigured()) {
     zohoLog('WARN', 'getAllTodayAttendance skipped — Zoho not configured');
     return [];
   }
 
-  // Read members from DB — this has emails; TEAM_MEMBERS env var does NOT
-  let teamMembers = [];
+  const { query } = require('../db');
+  const orgId     = organisationId || parseInt(process.env.ORGANISATION_ID || '1', 10);
+
+  // Load DB members
+  let dbMembers = [];
   try {
-    const { query } = require('../db');
-    const result = await query(
-      `SELECT id, name, email, slack_user_id
-       FROM members
-       WHERE is_active = true
-       ORDER BY name`
+    const res = await query(
+      `SELECT id, name, email, slack_user_id, zoho_iamuid
+       FROM members WHERE is_active = true AND organisation_id = $1 ORDER BY name`,
+      [orgId]
     );
-    teamMembers = result.rows;
-    zohoLog('INFO', 'Loading attendance for members from DB', { count: teamMembers.length });
-  } catch (dbErr) {
-    zohoLog('ERROR', 'Cannot read members from DB', { error: dbErr.message });
+    dbMembers = res.rows;
+  } catch (err) {
+    zohoLog('ERROR', 'Cannot load members from DB', { error: err.message });
     return [];
   }
 
-  if (teamMembers.length === 0) {
-    zohoLog('WARN', 'No active members found in DB');
+  if (!dbMembers.length) {
+    zohoLog('WARN', 'No active members in DB');
     return [];
   }
 
-  const results    = [];
-  const BATCH_SIZE = 3;
+  // Fetch Zoho presence (one API call for the whole org)
+  let zohoUsers = [];
+  try {
+    zohoUsers = await getAllUsersWithPresence();
+    const presentNames = zohoUsers.filter(u => u.isPresent).map(u => u.fullName);
+    zohoLog('INFO', 'Zoho presence loaded', {
+      total:   zohoUsers.length,
+      present: presentNames.length,
+      presentNames: presentNames.join(', ') || 'none',
+    });
+  } catch (err) {
+    zohoLog('ERROR', 'Failed to fetch Zoho presence — returning all as unknown', { error: err.message });
+    return dbMembers.map(m => ({
+      memberId:      m.id,
+      name:          m.name,
+      email:         m.email,
+      slackUserId:   m.slack_user_id,
+      checkedIn:     false,
+      isPresent:     false,
+      presenceStatus: 'unknown',
+      statusMessage: 'Zoho unavailable',
+      matchedBy:     'none',
+      zohoEmail:     null,
+      zohoName:      null,
+      department:    null,
+    }));
+  }
 
-  for (let i = 0; i < teamMembers.length; i += BATCH_SIZE) {
-    const batch       = teamMembers.slice(i, i + BATCH_SIZE);
-    const batchResult = await Promise.all(
-      batch.map(async (member) => {
-        if (!member.email) {
-          zohoLog('WARN', 'Member has no email — skipping attendance lookup', { name: member.name });
-          return {
-            memberId:     member.id,
-            name:         member.name,
-            email:        null,
-            slackUserId:  member.slack_user_id,
-            checkedIn:    false,
-            checkInTime:  null,
-            checkedOut:   false,
-            checkOutTime: null,
-            hoursWorked:  null,
-            status:       'No Email',
-          };
-        }
+  // Build lookup maps
+  const byEmail  = new Map(zohoUsers.map(z => [z.email,  z]));
+  const byIamuid = new Map(zohoUsers.map(z => [z.iamuid, z]));
 
-        const att = await getTodayAttendance(member.email);
-        return {
-          memberId:     member.id,
-          name:         member.name,
-          email:        member.email,
-          slackUserId:  member.slack_user_id,
-          ...att,
-        };
-      })
-    );
-    results.push(...batchResult);
+  return dbMembers.map(member => {
+    let zohoUser  = null;
+    let matchedBy = 'none';
 
-    // Pause between batches to respect Zoho rate limits
-    if (i + BATCH_SIZE < teamMembers.length) {
-      await new Promise((r) => setTimeout(r, 300));
+    // 1: zoho_iamuid stored in DB
+    if (member.zoho_iamuid && byIamuid.has(String(member.zoho_iamuid))) {
+      zohoUser  = byIamuid.get(String(member.zoho_iamuid));
+      matchedBy = 'iamuid';
     }
-  }
 
-  const checkedInCount = results.filter((m) => m.checkedIn).length;
-  zohoLog('INFO', 'Team attendance loaded', {
-    total:      results.length,
-    checkedIn:  checkedInCount,
-    noEmail:    results.filter((m) => m.status === 'No Email').length,
+    // 2: exact email match
+    if (!zohoUser && member.email) {
+      const key = member.email.toLowerCase().trim();
+      if (byEmail.has(key)) {
+        zohoUser  = byEmail.get(key);
+        matchedBy = 'email';
+      }
+    }
+
+    // 3: name-based fallback — handles email mismatches (e.g. Asaraf: DB has
+    //    "Asaraf" / "mohamed@throughbit.com" but Zoho has "Mohamed Asaraf" /
+    //    "mdasaraf042@gmail.com"). Check every word in the DB name against
+    //    Zoho's full name so "Asaraf" matches "Mohamed Asaraf".
+    if (!zohoUser && member.name) {
+      const dbWords = member.name.toLowerCase().split(/\s+/);
+      const found   = zohoUsers.find(z => {
+        const zohoFull = z.fullName.toLowerCase();
+        return dbWords.some(w =>
+          w.length >= 4 && ( // skip short words like "V", "K", "H", "S"
+            z.firstName.toLowerCase() === w ||
+            zohoFull.startsWith(w) ||
+            zohoFull.includes(w)
+          )
+        );
+      });
+      if (found) { zohoUser = found; matchedBy = 'name'; }
+    }
+
+    if (!zohoUser) {
+      zohoLog('WARN', 'No Zoho match', { name: member.name, email: member.email });
+      return {
+        memberId:      member.id,
+        name:          member.name,
+        email:         member.email,
+        slackUserId:   member.slack_user_id,
+        checkedIn:     false,
+        isPresent:     false,
+        presenceStatus: 'no_zoho_match',
+        statusMessage: '',
+        matchedBy:     'none',
+        zohoEmail:     null,
+        zohoName:      null,
+        department:    null,
+      };
+    }
+
+    return {
+      memberId:      member.id,
+      name:          member.name,
+      email:         member.email,
+      slackUserId:   member.slack_user_id,
+      checkedIn:     zohoUser.isPresent,   // backward compat alias
+      isPresent:     zohoUser.isPresent,
+      presenceStatus: zohoUser.presenceStatus,
+      statusMessage: zohoUser.statusMessage,
+      matchedBy,
+      zohoEmail:     zohoUser.email,
+      zohoName:      zohoUser.fullName,
+      department:    zohoUser.department || null,
+    };
   });
-
-  return results;
 }
 
 // ─── Single-date attendance ───────────────────────────────────────────────────
@@ -679,9 +713,9 @@ async function testConnection() {
 module.exports = {
   isConfigured,
   getAccessToken,
-  getAttendance,
-  getTodayAttendance,
+  getAllUsersWithPresence,
   getAllTodayAttendance,
+  getAttendance,
   isOnLeave,
   getAbsentMembers,
   getCheckInTime,
