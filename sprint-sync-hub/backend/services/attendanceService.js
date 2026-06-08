@@ -426,45 +426,68 @@ async function getTodayAttendance(organisationId) {
   if (!members.length) return _emptyResult(date);
 
   const attendanceMap = {}; // memberId → data
-  const sourceDetails = { zohoApiWorking: false, webhookDataExists: false, slackUsed: false };
+  const sourceDetails = { zohoApiWorking: false, webhookDataExists: false, slackUsed: false, zohoPresenceUsed: false };
   let primarySource   = 'no_data';
 
-  // ── Source 1: Zoho API ────────────────────────────────────────────────────
+  // ── Source 1a: Zoho Chat Presence (/_chat/v2/users) ───────────────────────
+  // Used as the primary source because the Zoho People attendance API
+  // returns 7201 on this account (module disabled). Presence is the best
+  // real-time signal available from Zoho on this plan.
+  // Members not matched in Zoho (no_zoho_match) fall through to Slack.
   try {
-    const zohoData = await _fetchFromZohoAPI(members, date);
-    if (zohoData && zohoData.length > 0) {
-      zohoData.forEach(d => { attendanceMap[d.memberId] = d; });
-      primarySource = 'zoho_api';
-      sourceDetails.zohoApiWorking = true;
-      console.log(`[Attendance] Zoho API: ${zohoData.length} records for ${date}`);
+    const zohoPresenceData = await zohoService.getAllTodayAttendance(orgId);
+    if (zohoPresenceData && zohoPresenceData.length > 0) {
+      zohoPresenceData.forEach(d => {
+        if (d.isPresent) {
+          // Only mark as present if actually online — absent members
+          // will be filled by Slack fallback below
+          attendanceMap[d.memberId] = {
+            memberId:      d.memberId,
+            checkedIn:     true,
+            checkInTime:   null, // presence doesn't give check-in time
+            checkedOut:    false,
+            checkOutTime:  null,
+            status:        'present',
+            source:        'zoho_presence',
+          };
+        }
+      });
+      const presentCount = Object.keys(attendanceMap).length;
+      sourceDetails.zohoPresenceUsed = true;
+      if (presentCount > 0) primarySource = 'zoho_presence';
+      console.log(`[Attendance] Zoho Presence: ${presentCount} members online for ${date}`);
     }
   } catch (err) {
-    console.warn('[Attendance] Zoho API source error:', err.message);
+    console.warn('[Attendance] Zoho Presence source error:', err.message);
   }
 
+  // ── Source 1b: Zoho People Attendance API (disabled on this account) ─────
+  // Skipped — returns 7201 for all endpoints. Left here for future use
+  // when the Zoho People API is enabled.
+  // try { const zohoData = await _fetchFromZohoAPI(members, date); ... }
+
   // ── Source 2: Zoho Webhook ────────────────────────────────────────────────
-  if (Object.keys(attendanceMap).length === 0) {
-    try {
-      const webhookData = await _getWebhookAttendance(date);
-      if (webhookData.length > 0) {
-        webhookData.forEach(d => {
-          attendanceMap[d.member_id] = {
-            memberId:     d.member_id,
-            checkedIn:    d.checked_in,
-            checkInTime:  d.check_in_time   ? d.check_in_time.substring(0, 5)  : null,
-            checkedOut:   d.checked_out,
-            checkOutTime: d.check_out_time  ? d.check_out_time.substring(0, 5) : null,
-            status:       d.status || 'present',
-            source:       'zoho_webhook',
-          };
-        });
-        primarySource = 'zoho_webhook';
-        sourceDetails.webhookDataExists = true;
-        console.log(`[Attendance] Zoho Webhook: ${webhookData.length} records for ${date}`);
-      }
-    } catch (err) {
-      console.warn('[Attendance] Webhook source error:', err.message);
+  // Merge on top — webhook gives real check-in times and overrides presence
+  try {
+    const webhookData = await _getWebhookAttendance(date);
+    if (webhookData.length > 0) {
+      webhookData.forEach(d => {
+        attendanceMap[d.member_id] = {
+          memberId:     d.member_id,
+          checkedIn:    d.checked_in,
+          checkInTime:  d.check_in_time   ? d.check_in_time.substring(0, 5)  : null,
+          checkedOut:   d.checked_out,
+          checkOutTime: d.check_out_time  ? d.check_out_time.substring(0, 5) : null,
+          status:       d.status || 'present',
+          source:       'zoho_webhook',
+        };
+      });
+      primarySource = 'zoho_webhook';
+      sourceDetails.webhookDataExists = true;
+      console.log(`[Attendance] Zoho Webhook: ${webhookData.length} records for ${date}`);
     }
+  } catch (err) {
+    console.warn('[Attendance] Webhook source error:', err.message);
   }
 
   // ── Source 3: Slack — fill all remaining gaps ─────────────────────────────

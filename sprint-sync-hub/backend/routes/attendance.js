@@ -20,58 +20,18 @@ const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
 
 router.get('/today', async (req, res) => {
   try {
-    const organisationId = ORG_ID();
-    const attendance     = await zohoService.getAllTodayAttendance(organisationId);
-
-    const present   = attendance.filter(m => m.isPresent);
-    const absent    = attendance.filter(m => !m.isPresent);
-    const unmatched = attendance.filter(m => m.matchedBy === 'none');
-
-    res.json({
-      configured: true,
-      date:       new Date().toISOString().split('T')[0],
-      source:     'zoho_presence',
-      present:    present.map(m => ({
-        id:            m.memberId,
-        memberId:      m.memberId,
-        name:          m.name,
-        email:         m.email,
-        slackUserId:   m.slackUserId,
-        status:        m.presenceStatus,
-        statusMessage: m.statusMessage,
-        matchedBy:     m.matchedBy,
-        department:    m.department,
-        zohoName:      m.zohoName,
-      })),
-      absent: absent.map(m => ({
-        id:        m.memberId,
-        memberId:  m.memberId,
-        name:      m.name,
-        email:     m.email,
-        reason:    m.matchedBy === 'none' ? 'No Zoho account matched' : 'Offline in Zoho',
-        matchedBy: m.matchedBy,
-      })),
-      onLeave:  [],
-      late:     [],
-      summary: {
-        total:     attendance.length,
-        present:   present.length,
-        absent:    absent.length,
-        onLeave:   0,
-        late:      0,
-        unmatched: unmatched.length,
-      },
-    });
+    // attendanceService tries sources in order:
+    //   1. Zoho Chat Presence (who is online in Zoho right now)
+    //   2. Zoho Webhook (real check-in times if webhook is configured)
+    //   3. Slack first message of day (guaranteed fallback for everyone)
+    const data = await attendanceService.getTodayAttendance(ORG_ID());
+    res.json(data);
   } catch (err) {
     console.error('[Attendance] /today failed:', err.message);
     res.status(500).json({
-      error:    err.message,
-      configured: false,
-      present:  [],
-      absent:   [],
-      onLeave:  [],
-      late:     [],
-      summary:  { total: 0, present: 0, absent: 0 },
+      error: err.message, configured: false,
+      present: [], absent: [], onLeave: [], late: [],
+      summary: { total: 0, present: 0, absent: 0 },
     });
   }
 });
