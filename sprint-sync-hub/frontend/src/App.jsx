@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { theme } from './theme.js';
 import { getConfig, getHealth } from './api.js';
+import ZohoCallbackPage from './ZohoCallbackPage.jsx';
 import OverviewTab    from './tabs/OverviewTab.jsx';
 import ConnectionsTab from './tabs/ConnectionsTab.jsx';
 import TeamTab        from './tabs/TeamTab.jsx';
@@ -62,6 +63,11 @@ function NavItem({ id, label, active, onClick }) {
 }
 
 export default function App() {
+  // Intercept the Zoho OAuth callback before rendering the main app
+  if (window.location.pathname === '/zoho/callback') {
+    return <ZohoCallbackPage />;
+  }
+
   const [active, setActive]         = useState('overview');
   const [config, setConfig]         = useState(null);
   const [health, setHealth]         = useState(null);

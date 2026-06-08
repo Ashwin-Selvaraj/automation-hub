@@ -36,6 +36,7 @@ app.use('/api/mismatch',      require('./routes/mismatch'));
 app.use('/api/roles',         require('./routes/roles'));
 app.use('/api/members',       require('./routes/members'));
 app.use('/api/webhooks',      require('./routes/webhooks'));
+app.use('/api/zoho/oauth',   require('./routes/zohoOAuth'));
 
 // Diagnostic routes — only available in non-production environments
 if (process.env.NODE_ENV !== 'production') {

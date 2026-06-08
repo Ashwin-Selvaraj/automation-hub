@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { theme, styles } from '../theme.js';
 import { getHealth, getEnvStatus, postConnections } from '../api.js';
+import { API_BASE } from '../config.js';
 import Card, { SectionHeader } from '../components/Card.jsx';
 import Badge from '../components/Badge.jsx';
 import Button from '../components/Button.jsx';
@@ -45,6 +46,60 @@ const SECTIONS = [
     ],
   },
 ];
+
+// ─── Zoho OAuth reconnect ─────────────────────────────────────────────────────
+
+function ZohoReconnectButton() {
+  const [loading, setLoading] = useState(false);
+
+  async function handleConnect() {
+    setLoading(true);
+    try {
+      const r    = await fetch(`${API_BASE}/api/zoho/oauth/url`);
+      const body = await r.json();
+      if (body.authUrl) {
+        window.location.href = body.authUrl;
+      } else {
+        alert('Could not get Zoho auth URL: ' + (body.error || 'Unknown error'));
+      }
+    } catch (e) {
+      alert('Backend error: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{
+      marginTop: 20, padding: '16px 20px',
+      background: '#EFF6FF', border: '1px solid #BFDBFE',
+      borderRadius: 10, display: 'flex', alignItems: 'center',
+      justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
+    }}>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#1D4ED8', fontFamily: 'inherit', marginBottom: 3 }}>
+          Zoho People — Attendance Scope
+        </div>
+        <div style={{ fontSize: 12, color: '#3B82F6', fontFamily: 'inherit', lineHeight: 1.5 }}>
+          Click to authorize attendance access (ZOHOPEOPLE.attendance.READ).
+          This opens Zoho login — after you accept, you'll be redirected back automatically.
+        </div>
+      </div>
+      <button
+        onClick={handleConnect}
+        disabled={loading}
+        style={{
+          padding: '9px 20px', background: loading ? '#93C5FD' : '#2563EB',
+          color: '#fff', border: 'none', borderRadius: 8,
+          fontWeight: 600, fontSize: 13, cursor: loading ? 'not-allowed' : 'pointer',
+          whiteSpace: 'nowrap', flexShrink: 0,
+        }}
+      >
+        {loading ? 'Opening…' : '🔗 Connect Zoho Attendance'}
+      </button>
+    </div>
+  );
+}
 
 export default function ConnectionsTab() {
   const [envStatus,    setEnvStatus]    = useState(null);
@@ -179,7 +234,7 @@ export default function ConnectionsTab() {
           )}
           {health && !testing && (
             <div style={{ display: 'flex', gap: 12, marginLeft: 4 }}>
-              {[['Slack', health.slack], ['Jira', health.jira], ['Claude', health.claude]].map(([lbl, ok]) => (
+              {[['Slack', health.slack], ['Jira', health.jira], ['Claude', health.claude], ['Zoho', health.zoho]].map(([lbl, ok]) => (
                 <span key={lbl} style={{ fontSize: 13, color: ok ? colors.green600 : colors.gray400, display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: ok ? colors.green600 : colors.gray300, display: 'inline-block' }} />
                   {lbl}
@@ -187,6 +242,9 @@ export default function ConnectionsTab() {
               ))}
             </div>
           )}
+
+          {/* Zoho OAuth reconnect button */}
+          <ZohoReconnectButton />
         </div>
       )}
     </div>

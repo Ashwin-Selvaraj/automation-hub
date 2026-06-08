@@ -710,6 +710,17 @@ async function testConnection() {
   return true;
 }
 
+/**
+ * Directly inject a new access token into the in-memory cache.
+ * Called by the OAuth route after a successful token exchange so the
+ * new token is used immediately without a server restart.
+ */
+function _setTokenCache(token, expiresAt) {
+  _token       = token;
+  _tokenExpiry = expiresAt;
+  zohoLog('INFO', 'Token cache updated via OAuth exchange');
+}
+
 module.exports = {
   isConfigured,
   getAccessToken,
@@ -722,4 +733,5 @@ module.exports = {
   isLateCheckIn,
   getTeamAttendance,
   testConnection,
+  _setTokenCache,
 };
