@@ -29,6 +29,7 @@ app.use('/api/sync',        require('./routes/sync'));
 app.use('/api/report',      require('./routes/report'));
 app.use('/api/performance', require('./routes/performance'));
 app.use('/api/attendance',  require('./routes/attendance'));
+app.use('/api/settings',    require('./routes/settings'));
 app.use('/api/checkout',        require('./routes/checkout'));
 app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
 app.use('/api/assignment',     require('./routes/assignment'));
@@ -174,6 +175,14 @@ async function boot() {
       console.warn('[Startup]   Run POST /api/members/sync-all to fix this.');
     }
   } catch (_) { /* non-fatal */ }
+
+  // 6e2. Seed zoho_attendance_enabled flag (default OFF — team lead must enable)
+  await query(
+    `INSERT INTO system_config (organisation_id, config_key, config_value)
+     VALUES ($1, 'zoho_attendance_enabled', 'false')
+     ON CONFLICT (organisation_id, config_key) DO NOTHING`,
+    [orgId]
+  ).catch(() => {});
 
   // 6f. Clear cached broken Zoho attendance endpoint (switching to presence API)
   try {

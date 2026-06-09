@@ -518,8 +518,8 @@ export default function OverviewTab({ config, navigate }) {
         ))}
       </div>
 
-      {/* Attendance error state */}
-      {attendanceError && (
+      {/* Attendance error state — only show when feature is enabled */}
+      {attendanceError && attendance?.enabled !== false && (
         <div style={{
           padding: '10px 14px', borderRadius: 8, marginBottom: 8,
           background: '#FFFBEB', border: '1px solid #FDE68A',
@@ -534,8 +534,8 @@ export default function OverviewTab({ config, navigate }) {
         </div>
       )}
 
-      {/* Attendance section — always shown (uses Slack fallback if Zoho unavailable) */}
-      {attendance?.configured && (
+      {/* Attendance section — hidden entirely when feature flag is OFF */}
+      {attendance?.enabled !== false && attendance?.configured && (
         <div>
           {/* Header row with source badge */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>

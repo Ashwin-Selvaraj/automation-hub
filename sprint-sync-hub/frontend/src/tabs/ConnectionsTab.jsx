@@ -101,6 +101,103 @@ function ZohoReconnectButton() {
   );
 }
 
+function ZohoAttendanceToggle() {
+  const [enabled, setEnabled] = useState(null);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/settings/zoho-attendance`)
+      .then(r => r.json())
+      .then(d => setEnabled(d.enabled))
+      .catch(() => setEnabled(false));
+  }, []);
+
+  const toggle = async () => {
+    setSaving(true);
+    setSaved(false);
+    try {
+      const newValue = !enabled;
+      const res = await fetch(`${API_BASE}/api/settings/zoho-attendance`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ enabled: newValue }),
+      });
+      const data = await res.json();
+      setEnabled(data.enabled);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error('Toggle failed:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (enabled === null) {
+    return <div style={{ padding: '16px 0', color: '#9CA3AF', fontSize: '0.8rem' }}>Loading…</div>;
+  }
+
+  return (
+    <div style={{
+      background: 'white', border: '1px solid #E5E7EB',
+      borderRadius: 6, padding: '20px 24px', marginBottom: 16,
+    }}>
+      <div style={{
+        fontSize: '0.63rem', color: '#6B7280', fontFamily: 'monospace',
+        letterSpacing: '0.1em', textTransform: 'uppercase',
+        marginBottom: 16, paddingBottom: 10, borderBottom: '1px solid #F3F4F6',
+      }}>
+        Feature Toggles
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+        <div>
+          <div style={{ fontSize: '0.9rem', fontWeight: 500, color: '#111827' }}>
+            Zoho Attendance
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#6B7280', marginTop: 4 }}>
+            {enabled
+              ? 'Enabled — attendance data is fetched from Zoho and shown in the dashboard.'
+              : 'Disabled — no Zoho API calls are made. Attendance section is hidden.'}
+          </div>
+        </div>
+        <div
+          onClick={saving ? undefined : toggle}
+          style={{
+            width: 48, height: 26, borderRadius: 100,
+            background: enabled ? '#2563EB' : '#D1D5DB',
+            cursor: saving ? 'not-allowed' : 'pointer',
+            position: 'relative', flexShrink: 0,
+            transition: 'background 0.2s', opacity: saving ? 0.6 : 1,
+          }}
+        >
+          <div style={{
+            position: 'absolute', width: 20, height: 20,
+            borderRadius: '50%', background: 'white',
+            top: 3, left: enabled ? 25 : 3,
+            transition: 'left 0.2s',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          }} />
+        </div>
+      </div>
+      {saved && (
+        <div style={{ marginTop: 12, fontSize: '0.75rem', color: '#16A34A', fontFamily: 'monospace' }}>
+          ✓ {enabled ? 'Zoho attendance enabled' : 'Zoho attendance disabled'}
+        </div>
+      )}
+      {!enabled && (
+        <div style={{
+          marginTop: 12, padding: '8px 12px',
+          background: '#FFFBEB', border: '1px solid #FDE68A',
+          borderRadius: 6, fontSize: '0.75rem', color: '#92400E',
+        }}>
+          Attendance section will not appear in the Overview page while this is off.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ConnectionsTab() {
   const [envStatus,    setEnvStatus]    = useState(null);
   const [health,       setHealth]       = useState(null);
@@ -247,6 +344,9 @@ export default function ConnectionsTab() {
           <ZohoReconnectButton />
         </div>
       )}
+
+      {/* Feature Toggles */}
+      {!loading && <ZohoAttendanceToggle />}
     </div>
   );
 }

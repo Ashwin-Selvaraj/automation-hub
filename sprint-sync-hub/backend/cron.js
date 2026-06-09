@@ -14,6 +14,7 @@ const memberRepo       = require('./repositories/memberRepository');
 const { getSprintWindow, toUnixTimestamp } = require('./utils/dateUtils');
 const configService = require('./services/configService');
 const zohoService     = require('./services/zohoService');
+const featureFlags    = require('./services/featureFlags');
 const standupRepo     = require('./repositories/standupRepository');
 const mismatchService = require('./services/mismatchService');
 const taskRepo        = require('./repositories/taskRepository');
@@ -519,6 +520,9 @@ function startCronJobs() {
   // '15,30,45,0 16,17,18,19 * * 1-5'
   // Fires at :00, :15, :30, :45 of hours 16–19 on weekdays
   cron.schedule('*/15 16,17,18,19 * * 1-5', async () => {
+    const zohoEnabled = await featureFlags.isZohoAttendanceEnabled();
+    if (!zohoEnabled) return;
+
     console.log(`[${new Date().toISOString()}] Cron: running checkout detection`);
     const orgId = getOrgId();
 

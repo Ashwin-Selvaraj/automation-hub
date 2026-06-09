@@ -11,19 +11,29 @@ const express           = require('express');
 const router            = express.Router();
 const attendanceService = require('../services/attendanceService');
 const zohoService       = require('../services/zohoService');
+const featureFlags      = require('../services/featureFlags');
 
 const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
 
+const DISABLED_RESPONSE = {
+  configured: false,
+  enabled:    false,
+  date:       new Date().toISOString().split('T')[0],
+  message:    'Zoho attendance is disabled. Enable it in Settings.',
+  present:    [],
+  absent:     [],
+  late:       [],
+  onLeave:    [],
+  summary:    { total: 0, present: 0, absent: 0, late: 0 },
+};
+
 // ─── GET /api/attendance/today ────────────────────────────────────────────────
-// Returns real-time presence via Zoho Chat API (/_chat/v2/users).
-// Falls back gracefully if Zoho is unavailable.
 
 router.get('/today', async (req, res) => {
   try {
-    // attendanceService tries sources in order:
-    //   1. Zoho Chat Presence (who is online in Zoho right now)
-    //   2. Zoho Webhook (real check-in times if webhook is configured)
-    //   3. Slack first message of day (guaranteed fallback for everyone)
+    const enabled = await featureFlags.isZohoAttendanceEnabled();
+    if (!enabled) return res.json({ ...DISABLED_RESPONSE, date: new Date().toISOString().split('T')[0] });
+
     const data = await attendanceService.getTodayAttendance(ORG_ID());
     res.json(data);
   } catch (err) {
@@ -37,10 +47,12 @@ router.get('/today', async (req, res) => {
 });
 
 // ─── GET /api/zoho/presence ───────────────────────────────────────────────────
-// Debug: raw presence data for all Zoho org members.
 
 router.get('/zoho/presence', async (req, res) => {
   try {
+    const enabled = await featureFlags.isZohoAttendanceEnabled();
+    if (!enabled) return res.json({ enabled: false, message: 'Zoho attendance is disabled.', data: [] });
+
     const users = await zohoService.getAllUsersWithPresence();
     res.json({
       total:   users.length,
@@ -117,6 +129,9 @@ router.post('/refresh-source', async (req, res) => {
 
 router.get('/history', async (req, res) => {
   try {
+    const enabled = await featureFlags.isZohoAttendanceEnabled();
+    if (!enabled) return res.json({ enabled: false, message: 'Zoho attendance is disabled.', data: [] });
+
     const days = Math.min(parseInt(req.query.days || '7', 10), 90);
     const data = await attendanceService.getTeamAttendanceHistory(ORG_ID(), days);
     res.json({ days, records: data });
