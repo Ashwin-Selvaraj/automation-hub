@@ -126,8 +126,13 @@ async function deactivate(memberId) {
   } catch (err) {
     console.error('[memberRepository.deactivate]', err.message);
     throw err;
-  }
+  } 
 }
+
+
+
+
+
 
 module.exports = {
   findOrCreate,
