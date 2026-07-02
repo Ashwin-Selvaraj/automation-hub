@@ -8,7 +8,6 @@ const memberRepo            = require('../repositories/memberRepository');
 const taskRepo              = require('../repositories/taskRepository');
 const statsRepo             = require('../repositories/statsRepository');
 const sprintRepo            = require('../repositories/sprintRepository');
-const zohoService           = require('../services/zohoService');
 
 const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
 
@@ -174,7 +173,9 @@ router.get('/capacity', async (req, res) => {
         let currentSprintTasks    = 0;
         let completionRateLast    = 0;
         let avgTasksPerSprint     = 0;
-        let isOnLeave             = false;
+        // Leave-aware capacity isn't available — the Zoho People Leave API
+        // is disabled on this account (see zohoService.js header comment).
+        const isOnLeave           = false;
 
         if (activeSprint) {
           const tasks = await taskRepo.findBySprintAndAssignee(activeSprint.id, m.id);
@@ -189,16 +190,8 @@ router.get('/capacity', async (req, res) => {
           }
         } catch { /* non-fatal */ }
 
-        if (zohoService.isConfigured()) {
-          try {
-            const today = new Date().toISOString().split('T')[0];
-            const leave = await zohoService.isOnLeave(m.email, today);
-            isOnLeave   = leave?.onLeave || false;
-          } catch { /* non-fatal */ }
-        }
-
         const capacityScore = Math.max(0, Math.min(100,
-          100 - (currentSprintTasks * 15) + (completionRateLast / 10) - (isOnLeave ? 100 : 0)
+          100 - (currentSprintTasks * 15) + (completionRateLast / 10)
         ));
 
         return {

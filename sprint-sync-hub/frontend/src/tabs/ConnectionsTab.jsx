@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { theme, styles } from '../theme.js';
 import { getHealth, getEnvStatus, postConnections } from '../api.js';
-import { API_BASE } from '../config.js';
+import { API_BASE, apiHeaders } from '../config.js';
 import Card, { SectionHeader } from '../components/Card.jsx';
 import Badge from '../components/Badge.jsx';
 import Button from '../components/Button.jsx';
@@ -55,7 +55,7 @@ function ZohoReconnectButton() {
   async function handleConnect() {
     setLoading(true);
     try {
-      const r    = await fetch(`${API_BASE}/api/zoho/oauth/url`);
+      const r    = await fetch(`${API_BASE}/api/zoho/oauth/url`, { headers: apiHeaders() });
       const body = await r.json();
       if (body.authUrl) {
         window.location.href = body.authUrl;
@@ -107,7 +107,7 @@ function ZohoAttendanceToggle() {
   const [saved,   setSaved]   = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/settings/zoho-attendance`)
+    fetch(`${API_BASE}/api/settings/zoho-attendance`, { headers: apiHeaders() })
       .then(r => r.json())
       .then(d => setEnabled(d.enabled))
       .catch(() => setEnabled(false));
@@ -120,7 +120,7 @@ function ZohoAttendanceToggle() {
       const newValue = !enabled;
       const res = await fetch(`${API_BASE}/api/settings/zoho-attendance`, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body:    JSON.stringify({ enabled: newValue }),
       });
       const data = await res.json();

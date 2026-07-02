@@ -13,7 +13,7 @@ const sprintRepo       = require('./repositories/sprintRepository');
 const memberRepo       = require('./repositories/memberRepository');
 const { getSprintWindow, toUnixTimestamp } = require('./utils/dateUtils');
 const configService = require('./services/configService');
-const zohoService     = require('./services/zohoService');
+const attendanceService = require('./services/attendanceService');
 const featureFlags    = require('./services/featureFlags');
 const standupRepo     = require('./repositories/standupRepository');
 const mismatchService = require('./services/mismatchService');
@@ -193,7 +193,11 @@ async function runHuddleSync() {
       } else {
         noMatch++;
         const alreadyDMed = activityLog.recentDMExists(msg.user, 'no_match_dm');
-        if (!alreadyDMed) {
+        // Role-based DM gating — managerial-only members are exempt. Default
+        // to true when we have no DB member to check (fail-open, matches
+        // performanceService.shouldSendTaskDM's own fail-open behaviour).
+        const canReceiveDM = dbMember ? await performanceService.shouldSendTaskDM(dbMember.id) : true;
+        if (!alreadyDMed && canReceiveDM) {
           try {
             const context = isBulkPost
               ? `${msg.text}\n\n(Note: this update covered multiple days posted in bulk)`
@@ -215,6 +219,8 @@ async function runHuddleSync() {
             console.error(`Huddle sync: sendDM failed for ${msg.user}:`, dmErr.message);
             activityLog.addEntry({ type: 'no_match_dm', userId: msg.user, userName: memberName, action: 'No-match DM failed', success: false, details: dmErr.message });
           }
+        } else if (!alreadyDMed && !canReceiveDM) {
+          activityLog.addEntry({ type: 'no_match_dm', userId: msg.user, userName: memberName, action: 'No-match DM skipped — managerial role exempt', success: true });
         }
 
         // Also silently alert team lead for no_match events
@@ -331,6 +337,18 @@ function startCronJobs() {
       const today    = toDateStr(new Date());
       const sprintId = await getActiveSprintId();
 
+      // Single unified attendance lookup (Zoho webhook > Zoho presence > Slack
+      // fallback) instead of per-member calls to the disabled Zoho People API.
+      // Note: leave detection is no longer available — it depended on the same
+      // disabled Zoho People Leave API, so there's no reliable signal for it.
+      let attendanceBySlackId = new Map();
+      try {
+        const attendanceToday = await attendanceService.getTodayAttendance(orgId);
+        attendanceBySlackId = new Map((attendanceToday.members || []).map((m) => [m.slackUserId, m]));
+      } catch (attErr) {
+        console.warn('[cron] EOD: attendance lookup failed, proceeding without it:', attErr.message);
+      }
+
       for (const member of cfg3.teamMembers) {
         const didPost    = postedUserIds.has(member.id);
         const didMatch   = matchedUserIds.has(member.id);
@@ -338,58 +356,39 @@ function startCronJobs() {
         if (alreadyDMed) continue;
 
         try {
-          // ── Zoho attendance check ─────────────────────────────────────────────
-          let attendanceData = null;
-          let leaveData      = { onLeave: false };
-          if (zohoService.isConfigured() && member.email) {
-            [attendanceData, leaveData] = await Promise.all([
-              zohoService.getAttendance(member.email, today).catch(() => null),
-              zohoService.isOnLeave(member.email, today).catch(() => ({ onLeave: false })),
-            ]);
-          }
+          const dbMember = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
+          const att      = attendanceBySlackId.get(member.id);
 
-          // Skip if on approved leave
-          if (leaveData?.onLeave) {
-            console.log(`[cron] EOD: skipping ${member.name} — on ${leaveData.leaveType || 'leave'} today`);
-            activityLog.addEntry({ type: 'leave_skip', userId: member.id, userName: member.name, action: `Skipped EOD DM — on ${leaveData.leaveType || 'leave'}`, success: true });
-            if (sprintId) {
-              try {
-                const dbM = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
-                await statsRepo.upsertDailyStats(orgId, sprintId, dbM.id, today, {
-                  on_leave: true, leave_type: leaveData.leaveType || 'Leave',
-                });
-              } catch (_) {}
-            }
-            continue;
-          }
-
-          // Skip if Zoho shows member did not check in (absent, no record)
-          if (zohoService.isConfigured() && member.email && attendanceData && !attendanceData.checkedIn) {
+          // Skip if attendance shows the member never checked in anywhere today
+          if (att && !att.checkedIn) {
             console.log(`[cron] EOD: skipping ${member.name} — no check-in today (absent)`);
             activityLog.addEntry({ type: 'absent_skip', userId: member.id, userName: member.name, action: 'Skipped EOD DM — not checked in (absent)', success: true });
             if (sprintId) {
-              try {
-                const dbM = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
-                await statsRepo.upsertDailyStats(orgId, sprintId, dbM.id, today, {
-                  checked_in: false, posted_standup: false,
-                });
-              } catch (_) {}
+              try { await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, { checked_in: false, posted_standup: false }); }
+              catch (_) {}
             }
             continue;
           }
 
           // Skip if member checked out more than 1 hour before EOD check time
-          if (attendanceData?.checkOutTime) {
+          if (att?.checkOutTime) {
             const eodMinutes  = parseTime(cfg3.eodCheckTime || '18:30');
-            const coStr       = attendanceData.checkOutTime;
-            const [coh, com]  = coStr.split(':').map(Number);
+            const [coh, com]  = att.checkOutTime.split(':').map(Number);
             const coMinutes   = coh * 60 + com;
             const eodTotalMin = eodMinutes.hour * 60 + eodMinutes.minute;
             if (eodTotalMin - coMinutes > 60) {
-              console.log(`[cron] EOD: skipping ${member.name} — checked out at ${coStr}, more than 1h before EOD`);
-              activityLog.addEntry({ type: 'early_checkout_skip', userId: member.id, userName: member.name, action: `Skipped EOD DM — checked out at ${coStr}`, success: true });
+              console.log(`[cron] EOD: skipping ${member.name} — checked out at ${att.checkOutTime}, more than 1h before EOD`);
+              activityLog.addEntry({ type: 'early_checkout_skip', userId: member.id, userName: member.name, action: `Skipped EOD DM — checked out at ${att.checkOutTime}`, success: true });
               continue;
             }
+          }
+
+          // Role-based DM gating — managerial-only members are exempt from automated task/standup DMs
+          const canReceiveDM = await performanceService.shouldSendTaskDM(dbMember.id);
+          if (!canReceiveDM) {
+            console.log(`[cron] EOD: skipping ${member.name} — managerial role exempt from task DMs`);
+            activityLog.addEntry({ type: 'missing_update_dm', userId: member.id, userName: member.name, action: 'Skipped EOD DM — managerial role exempt', success: true });
+            continue;
           }
 
           // ── Determine DM type ────────────────────────────────────────────────
@@ -411,12 +410,10 @@ function startCronJobs() {
 
           if (sprintId) {
             try {
-              const dbMember = await memberRepo.findOrCreate(orgId, member.id, member.name, member.email || null, member.role || null);
-              const attFields = attendanceData ? {
-                checked_in:    attendanceData.checkedIn,
-                check_in_time: attendanceData.checkInTime || null,
-                check_out_time:attendanceData.checkOutTime || null,
-                hours_worked:  attendanceData.hoursWorked || null,
+              const attFields = att ? {
+                checked_in:     att.checkedIn,
+                check_in_time:  att.checkInTime || null,
+                check_out_time: att.checkOutTime || null,
               } : {};
               if (!didPost) {
                 await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, today, { posted_standup: false, ...attFields });
@@ -504,7 +501,10 @@ function startCronJobs() {
   }, { timezone: tz });
 
   // ── Job 5: Checkout Detection ─────────────────────────────────────────────────
-  // Polls Zoho every 15 minutes from 4:30 PM to 7:30 PM, Mon–Fri.
+  // Polls every 15 minutes from 4:30 PM to 7:30 PM, Mon–Fri, for real checkout
+  // events. Real checkout timestamps only come from the Zoho webhook (presence
+  // and Slack-fallback sources don't carry a checkout event) — this job is
+  // webhook-only by nature of the data it needs.
   // For each member who has just checked out, checks if they posted a standup today.
   // If not, triggers a DM and records the missed standup.
   //
@@ -534,13 +534,14 @@ function startCronJobs() {
         return;
       }
 
-      // Fetch today's attendance for all team members from Zoho
-      let attendanceRecords;
+      // Fetch today's unified attendance (webhook data is what carries a real
+      // checkedOut/checkOutTime — presence and Slack fallback don't).
+      let attendanceToday;
       try {
-        attendanceRecords = await zohoService.getAllTodayAttendance();
-      } catch (zohoErr) {
-        console.error(`[cron] Checkout detection: Zoho unavailable — ${zohoErr.message}`);
-        activityLog.addEntry({ type: 'checkout_check', action: `Zoho unavailable: ${zohoErr.message}`, success: false });
+        attendanceToday = await attendanceService.getTodayAttendance(orgId);
+      } catch (attErr) {
+        console.error(`[cron] Checkout detection: attendance lookup failed — ${attErr.message}`);
+        activityLog.addEntry({ type: 'checkout_check', action: `Attendance lookup failed: ${attErr.message}`, success: false });
         return;
       }
 
@@ -549,33 +550,21 @@ function startCronJobs() {
       let missingStandupCount = 0;
       let dmsSentCount = 0;
 
-      for (const att of attendanceRecords) {
+      for (const att of (attendanceToday.members || [])) {
         try {
           // Skip members who haven't checked out yet
           if (!att.checkedOut) continue;
           checkedOutCount++;
 
-          // Find the DB member record (try Slack ID first, then email)
-          let dbMember = null;
-          if (att.slackUserId) {
-            dbMember = await memberRepo.findBySlackId(orgId, att.slackUserId).catch(() => null);
-          }
-          if (!dbMember && att.email) {
-            dbMember = await memberRepo.findByEmail(orgId, att.email).catch(() => null);
-          }
-          if (!dbMember) {
-            console.warn(`[cron] Checkout detection: no DB record for ${att.name} (${att.email}) — skipping`);
-            continue;
-          }
-
-          // Skip if already processed today (prevents duplicate DMs on subsequent polls)
-          if (processedToday.has(dbMember.id)) continue;
+          // attendanceService already resolves DB members internally — no
+          // separate lookup needed, att.memberId is the DB id.
+          if (processedToday.has(att.memberId)) continue;
 
           // Check standup status
-          const standupPost = await standupRepo.findByMemberAndDate(dbMember.id, today);
+          const standupPost = await standupRepo.findByMemberAndDate(att.memberId, today);
           if (standupPost) {
             // Posted standup — mark as processed, log, move on
-            processedToday.add(dbMember.id);
+            processedToday.add(att.memberId);
             console.log(`[cron] Checkout detection: ${att.name} checked out at ${att.checkOutTime} ✓ (standup posted)`);
             activityLog.addEntry({
               type: 'checkout_with_standup', userId: att.slackUserId, userName: att.name,
@@ -586,8 +575,8 @@ function startCronJobs() {
 
           // No standup — trigger DM + record
           missingStandupCount++;
-          const result = await performanceService.recordCheckoutWithoutStandup(orgId, sprintId, dbMember.id, att.checkOutTime || '—');
-          processedToday.add(dbMember.id);
+          const result = await performanceService.recordCheckoutWithoutStandup(orgId, sprintId, att.memberId, att.checkOutTime || '—');
+          processedToday.add(att.memberId);
 
           if (result.dmSent) {
             dmsSentCount++;

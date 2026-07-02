@@ -1,20 +1,25 @@
 'use strict';
 
 /**
- * Checkout routes — checkout status, manual nudge, and history.
+ * Checkout routes — manual nudge and history.
  * Mounted at /api/checkout in server.js.
+ *
+ * The "today's checkout status" endpoint was removed — it derived "checked
+ * out" from Zoho Chat presence going offline, which is not the same signal
+ * as a real Zoho People check-out and was misleading. Real-time checkout
+ * detection (cron Job 5 in cron.js) already only fires on genuine Zoho
+ * webhook check-out events; see attendanceService.js.
  */
 
 const express            = require('express');
 const router             = express.Router();
-const zohoService        = require('../services/zohoService');
+const attendanceService  = require('../services/attendanceService');
 const performanceService = require('../services/performanceService');
 const memberRepo         = require('../repositories/memberRepository');
 const standupRepo        = require('../repositories/standupRepository');
 const notifRepo          = require('../repositories/notificationRepository');
 const sprintRepo         = require('../repositories/sprintRepository');
 const statsRepo          = require('../repositories/statsRepository');
-const configService      = require('../services/configService');
 const activityLog        = require('../services/activityLog');
 
 function getOrgId() {
@@ -26,109 +31,6 @@ function toDateStr(d) {
   if (typeof d === 'string') return d.substring(0, 10);
   return d.toISOString().split('T')[0];
 }
-
-function deriveStatus({ checkedOut, checkedIn, postedStandup }) {
-  if (!checkedIn)            return 'absent';
-  if (checkedOut && postedStandup)  return 'complete';
-  if (checkedOut && !postedStandup) return 'checked_out_no_standup';
-  return 'still_in'; // checkedIn, not yet checked out
-}
-
-// ─── GET /api/checkout/status/today ──────────────────────────────────────────
-// Returns today's checkout + standup status for all team members.
-
-router.get('/status/today', async (req, res) => {
-  try {
-    const orgId    = getOrgId();
-    const today    = toDateStr(new Date());
-    const sprint   = await sprintRepo.getActiveSprint(orgId);
-    const sprintId = sprint?.id || null;
-
-    // Fetch all DB members + Zoho attendance in parallel
-    const [dbMembers, attendanceRecords] = await Promise.all([
-      memberRepo.findAll(orgId),
-      zohoService.isConfigured() ? zohoService.getAllTodayAttendance().catch(() => []) : Promise.resolve([]),
-    ]);
-
-    // Build an email→attendance map for quick lookup
-    const attByEmail = {};
-    const attBySlack = {};
-    for (const att of attendanceRecords) {
-      if (att.email)       attByEmail[att.email.toLowerCase()] = att;
-      if (att.slackUserId) attBySlack[att.slackUserId]         = att;
-    }
-
-    // For each DB member, check standup + attendance
-    const memberRows = await Promise.all(
-      dbMembers.map(async (m) => {
-        // Lookup attendance record for this member
-        const att = attBySlack[m.slack_user_id]
-          || (m.email ? attByEmail[m.email.toLowerCase()] : null)
-          || null;
-
-        const checkedIn    = att?.checkedIn    ?? false;
-        const checkInTime  = att?.checkInTime  ?? null;
-        const checkedOut   = att?.checkedOut   ?? false;
-        const checkOutTime = att?.checkOutTime ?? null;
-
-        // Check standup post
-        let postedStandup    = false;
-        let standupPostTime  = null;
-        if (sprintId) {
-          const post = await standupRepo.findByMemberAndDate(m.id, today).catch(() => null);
-          if (post) {
-            postedStandup   = true;
-            standupPostTime = post.created_at
-              ? new Date(post.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-              : null;
-          }
-        }
-
-        // Check if a missing-standup DM was already sent today
-        const dmSent = await notifRepo.wasNotifiedRecently(m.id, 'missing_standup', null, 20).catch(() => false);
-
-        return {
-          memberId:       m.id,
-          name:           m.name,
-          slackUserId:    m.slack_user_id,
-          hasEmail:       !!m.email,
-          checkedIn,
-          checkInTime,
-          checkedOut,
-          checkOutTime,
-          postedStandup,
-          standupPostTime,
-          status:         deriveStatus({ checkedOut, checkedIn, postedStandup }),
-          dmSent,
-        };
-      })
-    );
-
-    const summary = {
-      totalMembers:            memberRows.length,
-      checkedIn:               memberRows.filter((r) => r.checkedIn).length,
-      checkedOut:              memberRows.filter((r) => r.checkedOut).length,
-      postedStandup:           memberRows.filter((r) => r.postedStandup).length,
-      checkoutWithoutStandup:  memberRows.filter((r) => r.status === 'checked_out_no_standup').length,
-      stillIn:                 memberRows.filter((r) => r.status === 'still_in').length,
-      noEmail:                 memberRows.filter((r) => !r.hasEmail).length,
-      zohoUnavailable:         !zohoService.isConfigured() || attendanceRecords.length === 0,
-    };
-
-    res.json({
-      date: today,
-      fetchedLiveFromZoho: zohoService.isConfigured(),
-      members: memberRows,
-      summary,
-    });
-  } catch (err) {
-    console.error('[Checkout] GET /status/today failed:', err.message);
-    res.status(500).json({
-      error: err.message,
-      hint:  'Run GET /api/debug/zoho to diagnose the Zoho integration',
-    });
-  }
-});
 
 // ─── POST /api/checkout/nudge/:memberId ──────────────────────────────────────
 // Manually trigger a checkout nudge DM for a specific member.
@@ -147,12 +49,15 @@ router.post('/nudge/:memberId', async (req, res) => {
       return res.status(404).json({ error: 'Member not found' });
     }
 
-    // Get checkout time from Zoho (or use current time as fallback)
+    // Use today's real checkout time if the unified attendance source has one
+    // (only ever populated from a genuine Zoho webhook event) — otherwise
+    // fall back to now.
     let checkoutTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    if (zohoService.isConfigured() && member.email) {
-      const att = await zohoService.getTodayAttendance(member.email).catch(() => null);
+    try {
+      const attendanceToday = await attendanceService.getTodayAttendance(orgId);
+      const att = (attendanceToday.members || []).find((m) => m.memberId === memberId);
       if (att?.checkOutTime) checkoutTime = att.checkOutTime;
-    }
+    } catch (_) { /* non-fatal — fall back to now */ }
 
     activityLog.addEntry({
       type: 'manual_nudge', userId: member.slack_user_id, userName: member.name,

@@ -3,8 +3,8 @@
 /**
  * Attendance routes — mounted at /api/attendance in server.js.
  *
- * All reads go through attendanceService which tries:
- *   Zoho API → Zoho Webhook → Slack first message
+ * All reads go through attendanceService, which merges:
+ *   Zoho Chat presence → Zoho Webhook (real-time, overrides presence) → Slack fallback
  */
 
 const express           = require('express');
@@ -74,51 +74,20 @@ router.get('/zoho/presence', async (req, res) => {
 });
 
 // ─── GET /api/attendance/source ───────────────────────────────────────────────
-// Shows which data source is currently active and the discovered endpoint.
+// Reports which data source(s) actually supplied today's attendance data.
 
 router.get('/source', async (req, res) => {
   try {
-    const endpoint  = await attendanceService.discoverZohoEndpoint();
-    const { query } = require('../db');
-    const cfg = await query(
-      `SELECT config_key, config_value, updated_at
-       FROM system_config WHERE organisation_id = $1`,
-      [ORG_ID()]
-    ).catch(() => ({ rows: [] }));
-
+    const data = await attendanceService.getTodayAttendance(ORG_ID());
     res.json({
-      zohoApiEndpoint: endpoint || null,
-      zohoApiWorking:  !!endpoint,
-      configCache:     cfg.rows,
+      primarySource: data.source,
+      sourceDetails: data.sourceDetails,
       activeSources: [
-        endpoint        ? '1. zoho_api (primary)'                    : null,
-        '2. zoho_webhook (real-time if webhook is configured)',
-        '3. slack_presence (always available — first message of day)',
-      ].filter(Boolean),
+        '1. zoho_presence (Zoho Chat presence — online/offline, no check-in time)',
+        '2. zoho_webhook (real-time check-in/out — overrides presence when configured)',
+        '3. slack_presence (fallback — first Slack message of the day)',
+      ],
       webhookSetupUrl: '/api/webhooks/zoho-attendance',
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── POST /api/attendance/refresh-source ─────────────────────────────────────
-// Force re-probe of Zoho endpoints (clears cached discovery result).
-
-router.post('/refresh-source', async (req, res) => {
-  try {
-    attendanceService.resetEndpointCache();
-    const { query } = require('../db');
-    await query(
-      `DELETE FROM system_config
-       WHERE organisation_id = $1 AND config_key = 'zoho_attendance_endpoint'`,
-      [ORG_ID()]
-    ).catch(() => {});
-    const endpoint = await attendanceService.discoverZohoEndpoint();
-    res.json({
-      probeComplete:   true,
-      zohoApiEndpoint: endpoint || null,
-      zohoApiWorking:  !!endpoint,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

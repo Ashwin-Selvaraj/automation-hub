@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { theme } from '../theme.js';
-import { API_BASE } from '../config.js';
+import { API_BASE, apiHeaders } from '../config.js';
 import Spinner from '../components/Spinner.jsx';
 import Badge   from '../components/Badge.jsx';
 
@@ -9,13 +9,13 @@ const { colors, fonts } = theme;
 // ─── API ──────────────────────────────────────────────────────────────────────
 
 async function apiFetch(path) {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
 async function apiPost(path) {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST' });
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: apiHeaders() });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -554,9 +554,9 @@ function MemberDrawer({ memberId, onClose }) {
     setLoading(true); setError(null);
     Promise.all([
       apiFetch(`/api/performance/member/${memberId}`),
-      fetch(`${API_BASE}/api/checkout/history?memberId=${memberId}&days=30`)
+      fetch(`${API_BASE}/api/checkout/history?memberId=${memberId}&days=30`, { headers: apiHeaders() })
         .then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${API_BASE}/api/mismatch/member/${memberId}`)
+      fetch(`${API_BASE}/api/mismatch/member/${memberId}`, { headers: apiHeaders() })
         .then((r) => r.ok ? r.json() : null).catch(() => null),
     ])
       .then(([prof, hist, mismatch]) => { setProfile(prof); setCheckoutHistory(hist); setMismatchHistory(mismatch); })
@@ -1010,7 +1010,7 @@ export default function PerformanceTab() {
     setLoading(true); setError(null);
     Promise.all([
       apiFetch('/api/performance/dashboard'),
-      fetch(`${API_BASE}/api/mismatch/stats`).then((r) => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/api/mismatch/stats`, { headers: apiHeaders() }).then((r) => r.ok ? r.json() : null).catch(() => null),
     ])
       .then(([dash, mstats]) => { setDashboard(dash); setMismatchStats(mstats); })
       .catch((e) => setError(e.message))

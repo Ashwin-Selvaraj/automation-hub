@@ -3,10 +3,17 @@
 /**
  * attendanceService.js — Unified attendance service.
  *
- * Tries data sources in priority order:
- *   1. Zoho Attendance API  — if a working endpoint was discovered
- *   2. Zoho Webhook data    — stored from real-time push events
- *   3. Slack first message  — guaranteed fallback (always available)
+ * Merges data sources in priority order (later sources override earlier ones):
+ *   1. Zoho Chat presence   — /_chat/v2/users, confirmed working, no check-in time
+ *   2. Zoho Webhook data    — stored from real-time push events, overrides presence
+ *      with real check-in/out times when configured (Zoho People → Settings →
+ *      Integrations → Webhooks → POST /api/webhooks/zoho-attendance)
+ *   3. Slack first message  — guaranteed fallback for anyone the above missed
+ *
+ * The Zoho People Attendance REST API (getAttendance/getAbsence/etc.) is not
+ * used here — it returns error 7201 (module disabled) on every endpoint
+ * variant on this account, so polling it was pure wasted work. If Zoho People
+ * attendance is ever re-enabled, that data source can be added back.
  *
  * External code never needs to know which source is active.
  * getTodayAttendance() NEVER throws — it catches all errors and falls back.
@@ -49,204 +56,7 @@ function minutesDiff(from, to) {
   return (th * 60 + tm) - (fh * 60 + fm);
 }
 
-// ─── SOURCE DISCOVERY ─────────────────────────────────────────────────────────
-
-// null = not probed yet, false = probed, nothing works, string = working path
-let _discoveredEndpoint = null;
-
-/**
- * Probe all known Zoho People attendance endpoint variants until one returns
- * a non-error 200. Caches the result in memory and in system_config so the
- * probe never runs again until the server restarts.
- *
- * @returns {Promise<string|null>} working path (without query string) or null
- */
-async function discoverZohoEndpoint() {
-  if (_discoveredEndpoint !== null) {
-    return _discoveredEndpoint === false ? null : _discoveredEndpoint;
-  }
-
-  // Check DB cache first — avoids repeated probing after restarts
-  try {
-    const cached = await query(
-      `SELECT config_value FROM system_config
-       WHERE organisation_id = $1 AND config_key = 'zoho_attendance_endpoint'`,
-      [ORG_ID()]
-    );
-    if (cached.rows.length > 0) {
-      const val = cached.rows[0].config_value;
-      if (val) {
-        _discoveredEndpoint = val;
-        console.log(`[Attendance] Loaded Zoho endpoint from DB cache: ${val}`);
-        return val;
-      }
-      // Empty string = previously probed and nothing worked
-      _discoveredEndpoint = false;
-      return null;
-    }
-  } catch (_) { /* DB cache miss is fine — will probe */ }
-
-  console.log('[Attendance] Probing Zoho attendance endpoints...');
-
-  let token;
-  try {
-    token = await zohoService.getAccessToken();
-  } catch (err) {
-    console.warn('[Attendance] Cannot probe — token unavailable:', err.message);
-    _discoveredEndpoint = false;
-    return null;
-  }
-
-  const axios    = require('axios');
-  const today    = getTodayIST();
-  const testEmail = 'ashwin@throughbit.com';
-  const baseUrl  = 'https://people.zoho.in';
-
-  // All known endpoint variants for Zoho People attendance
-  const candidates = [
-    `/people/api/v2/attendance?empId=${testEmail}&startDate=${today}&endDate=${today}`,
-    `/people/api/v2/attendance/records?empId=${testEmail}&from=${today}&to=${today}`,
-    `/people/api/attendance?empId=${testEmail}&startDate=${today}&endDate=${today}&dateFormat=yyyy-MM-dd`,
-    `/people/api/attendance?user=${testEmail}&startDate=${today}&endDate=${today}`,
-    `/people/api/attendance?empId=${testEmail}&fromDate=${today}&toDate=${today}`,
-    `/people/api/attendance?startDate=${today}&endDate=${today}`,
-    `/people/api/attendance/getadminattendance?startDate=${today}&endDate=${today}`,
-    `/people/api/forms/attendance/getRecords?startDate=${today}&endDate=${today}`,
-    `/people/api/forms/P_Attendance/getRecords?startDate=${today}&endDate=${today}`,
-    `/people/api/attendance/list?startDate=${today}&endDate=${today}`,
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      const resp = await axios.get(`${baseUrl}${candidate}`, {
-        headers: { Authorization: `Zoho-oauthtoken ${token}` },
-        timeout: 6000,
-      });
-      const data = resp.data;
-      // 7201 = invalid URL / feature not enabled; skip these
-      const errorCode = data?.response?.errors?.code || data?.code;
-      if (resp.status === 200 && errorCode !== 7201 && !data?.msg?.toLowerCase().includes('invalid')) {
-        const endpointPath = candidate.split('?')[0];
-        console.log(`[Attendance] ✅ Working endpoint: ${endpointPath}`);
-        _discoveredEndpoint = endpointPath;
-        await _cacheEndpoint(endpointPath);
-        return endpointPath;
-      }
-      console.log(`[Attendance] ✗ ${candidate.split('?')[0]} — code ${errorCode}`);
-    } catch (err) {
-      const code = err.response?.data?.response?.errors?.code;
-      if (code !== 7201) {
-        console.log(`[Attendance] ✗ ${candidate.split('?')[0]} — HTTP ${err.response?.status}`);
-      }
-    }
-    await new Promise(r => setTimeout(r, 200));
-  }
-
-  console.warn('[Attendance] No working Zoho API endpoint — will use webhook/Slack fallbacks');
-  _discoveredEndpoint = false;
-  await _cacheEndpoint(''); // cache the failure
-  return null;
-}
-
-async function _cacheEndpoint(value) {
-  try {
-    await query(
-      `INSERT INTO system_config (organisation_id, config_key, config_value, updated_at)
-       VALUES ($1, 'zoho_attendance_endpoint', $2, NOW())
-       ON CONFLICT (organisation_id, config_key)
-       DO UPDATE SET config_value = $2, updated_at = NOW()`,
-      [ORG_ID(), value]
-    );
-  } catch (_) { /* non-fatal */ }
-}
-
-/** Force re-probe on next call (e.g. called from debug endpoint). */
-function resetEndpointCache() {
-  _discoveredEndpoint = null;
-}
-
-// ─── SOURCE 1: Zoho Attendance API ───────────────────────────────────────────
-
-async function _fetchFromZohoAPI(members, date) {
-  const endpoint = await discoverZohoEndpoint();
-  if (!endpoint) return null;
-
-  const axios  = require('axios');
-  let token;
-  try {
-    token = await zohoService.getAccessToken();
-  } catch (err) {
-    console.warn('[Attendance:ZohoAPI] Token unavailable:', err.message);
-    return null;
-  }
-
-  const results = [];
-
-  for (const member of members) {
-    if (!member.email) continue;
-    try {
-      const resp = await axios.get(`https://people.zoho.in${endpoint}`, {
-        headers: { Authorization: `Zoho-oauthtoken ${token}` },
-        params: {
-          empId:      member.email,
-          user:       member.email,
-          startDate:  date,
-          endDate:    date,
-          fromDate:   date,
-          toDate:     date,
-          from:       date,
-          to:         date,
-          dateFormat: 'yyyy-MM-dd',
-        },
-        timeout: 8000,
-      });
-
-      const parsed = _parseZohoAPIResponse(resp.data, member.email);
-      if (parsed) results.push({ memberId: member.id, ...parsed, source: 'zoho_api' });
-
-      await new Promise(r => setTimeout(r, 150));
-    } catch (err) {
-      console.warn(`[Attendance:ZohoAPI] ${member.email}: ${err.message}`);
-    }
-  }
-
-  return results.length > 0 ? results : null;
-}
-
-function _parseZohoAPIResponse(data, email) {
-  if (!data) return null;
-
-  let record = null;
-  if (data?.response?.result) {
-    const r = data.response.result;
-    record = Array.isArray(r) ? r[0] : r;
-  } else if (Array.isArray(data) && data.length > 0) {
-    record = data[0];
-  } else if (data?.data?.[0]) {
-    record = data.data[0];
-  } else if (data?.checkIn || data?.CheckIn || data?.check_in) {
-    record = data;
-  }
-
-  if (!record) return null;
-
-  const checkIn  = record.checkIn  || record.CheckIn  || record.check_in
-    || record.attendanceCheckIn  || record.checkinTime  || null;
-  const checkOut = record.checkOut || record.CheckOut || record.check_out
-    || record.attendanceCheckOut || record.checkoutTime || null;
-
-  return {
-    checkedIn:    !!checkIn,
-    checkInTime:  parseTimeString(checkIn),
-    checkedOut:   !!checkOut,
-    checkOutTime: parseTimeString(checkOut),
-    hoursWorked:  record.hoursWorked || record.hours_worked || null,
-    status:       checkIn ? 'present' : 'absent',
-    rawData:      record,
-  };
-}
-
-// ─── SOURCE 2: Zoho Webhook (push-based) ─────────────────────────────────────
+// ─── SOURCE: Zoho Webhook (push-based) ───────────────────────────────────────
 
 /**
  * Process an incoming Zoho People webhook payload and store in DB.
@@ -392,13 +202,13 @@ async function _getSlackPresenceAttendance(members, date) {
  * @param {number} [organisationId]
  * @returns {Promise<{
  *   date: string,
- *   source: 'zoho_api'|'zoho_webhook'|'slack_presence'|'mixed'|'no_data',
+ *   source: 'zoho_presence'|'zoho_webhook'|'slack_presence'|'mixed'|'no_data',
  *   members: AttendanceMember[],
  *   present: AttendanceMember[],
  *   absent:  AttendanceMember[],
  *   late:    AttendanceMember[],
  *   summary: { total, present, absent, late, onLeave, noData },
- *   sourceDetails: { zohoApiWorking, webhookDataExists, slackUsed },
+ *   sourceDetails: { zohoPresenceUsed, webhookDataExists, slackUsed },
  *   configured: true,
  * }>}
  */
@@ -426,14 +236,12 @@ async function getTodayAttendance(organisationId) {
   if (!members.length) return _emptyResult(date);
 
   const attendanceMap = {}; // memberId → data
-  const sourceDetails = { zohoApiWorking: false, webhookDataExists: false, slackUsed: false, zohoPresenceUsed: false };
+  const sourceDetails = { webhookDataExists: false, slackUsed: false, zohoPresenceUsed: false };
   let primarySource   = 'no_data';
 
-  // ── Source 1a: Zoho Chat Presence (/_chat/v2/users) ───────────────────────
-  // Used as the primary source because the Zoho People attendance API
-  // returns 7201 on this account (module disabled). Presence is the best
-  // real-time signal available from Zoho on this plan.
-  // Members not matched in Zoho (no_zoho_match) fall through to Slack.
+  // ── Source: Zoho Chat Presence (/_chat/v2/users) ──────────────────────────
+  // Confirmed working on this account. Real-time online/offline signal, no
+  // check-in timestamp. Members not matched in Zoho fall through to Slack.
   try {
     const zohoPresenceData = await zohoService.getAllTodayAttendance(orgId);
     if (zohoPresenceData && zohoPresenceData.length > 0) {
@@ -461,12 +269,7 @@ async function getTodayAttendance(organisationId) {
     console.warn('[Attendance] Zoho Presence source error:', err.message);
   }
 
-  // ── Source 1b: Zoho People Attendance API (disabled on this account) ─────
-  // Skipped — returns 7201 for all endpoints. Left here for future use
-  // when the Zoho People API is enabled.
-  // try { const zohoData = await _fetchFromZohoAPI(members, date); ... }
-
-  // ── Source 2: Zoho Webhook ────────────────────────────────────────────────
+  // ── Source: Zoho Webhook ───────────────────────────────────────────────────
   // Merge on top — webhook gives real check-in times and overrides presence
   try {
     const webhookData = await _getWebhookAttendance(date);
@@ -614,7 +417,7 @@ function _emptyResult(date) {
     source: 'no_data',
     members: [], present: [], absent: [], late: [], onLeave: [],
     summary: { total: 0, present: 0, absent: 0, late: 0, onLeave: 0, noData: 0 },
-    sourceDetails: { zohoApiWorking: false, webhookDataExists: false, slackUsed: false },
+    sourceDetails: { zohoPresenceUsed: false, webhookDataExists: false, slackUsed: false },
   };
 }
 
@@ -654,6 +457,4 @@ module.exports = {
   getMemberAttendanceHistory,
   getTeamAttendanceHistory,
   processZohoWebhook,
-  discoverZohoEndpoint,
-  resetEndpointCache,
 };

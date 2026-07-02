@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { theme, styles } from '../theme.js';
-import { API_BASE } from '../config.js';
+import { API_BASE, apiHeaders } from '../config.js';
 
 const { colors, fonts, radius, shadows } = theme;
 
@@ -8,7 +8,7 @@ const { colors, fonts, radius, shadows } = theme;
 
 function api(path, opts = {}) {
   return fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     ...opts,
   }).then(async (r) => {
     const body = await r.json();

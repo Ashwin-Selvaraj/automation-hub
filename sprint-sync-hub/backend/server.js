@@ -22,29 +22,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/api/config',      require('./routes/config'));
-app.use('/api/slack',       require('./routes/slack'));
-app.use('/api/jira',        require('./routes/jira'));
-app.use('/api/sync',        require('./routes/sync'));
-app.use('/api/report',      require('./routes/report'));
-app.use('/api/performance', require('./routes/performance'));
-app.use('/api/attendance',  require('./routes/attendance'));
-app.use('/api/settings',    require('./routes/settings'));
-app.use('/api/checkout',        require('./routes/checkout'));
-app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
-app.use('/api/assignment',     require('./routes/assignment'));
-app.use('/api/mismatch',      require('./routes/mismatch'));
-app.use('/api/roles',         require('./routes/roles'));
-app.use('/api/members',       require('./routes/members'));
-app.use('/api/webhooks',      require('./routes/webhooks'));
-app.use('/api/zoho/oauth',   require('./routes/zohoOAuth'));
-
-// Diagnostic routes — only available in non-production environments
-if (process.env.NODE_ENV !== 'production') {
-  app.use('/api/debug', require('./routes/debug'));
-  console.log('[Server] Debug routes mounted at /api/debug (development only)');
-}
-
+// Health check and the Zoho webhook must stay reachable without the API key —
+// health is used by uptime monitors, and Zoho can't send custom headers.
 app.get('/api/health', (req, res) => {
   const cfg    = configService.getSprintConfig();
   const window = getSprintWindow();
@@ -57,6 +36,31 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
   });
 });
+app.use('/api/webhooks', require('./routes/webhooks'));
+
+const { requireApiKey } = require('./middleware/auth');
+app.use('/api', requireApiKey);
+
+app.use('/api/config',      require('./routes/config'));
+app.use('/api/slack',       require('./routes/slack'));
+app.use('/api/jira',        require('./routes/jira'));
+app.use('/api/sync',        require('./routes/sync'));
+app.use('/api/report',      require('./routes/report'));
+app.use('/api/performance', require('./routes/performance'));
+app.use('/api/attendance',  require('./routes/attendance'));
+app.use('/api/settings',    require('./routes/settings'));
+app.use('/api/checkout',        require('./routes/checkout'));
+app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
+app.use('/api/mismatch',      require('./routes/mismatch'));
+app.use('/api/roles',         require('./routes/roles'));
+app.use('/api/members',       require('./routes/members'));
+app.use('/api/zoho/oauth',   require('./routes/zohoOAuth'));
+
+// Diagnostic routes — only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/debug', require('./routes/debug'));
+  console.log('[Server] Debug routes mounted at /api/debug (development only)');
+}
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
@@ -184,33 +188,12 @@ async function boot() {
     [orgId]
   ).catch(() => {});
 
-  // 6f. Clear cached broken Zoho attendance endpoint (switching to presence API)
-  try {
-    const { query } = require('./db');
-    await query(
-      `DELETE FROM system_config
-       WHERE organisation_id = $1 AND config_key = 'zoho_attendance_endpoint'`,
-      [parseInt(process.env.ORGANISATION_ID || '1')]
-    );
-    console.log('[Startup] Cleared stale Zoho attendance endpoint cache');
-  } catch (_) { /* non-fatal — table may not exist yet */ }
-
-  // 6h. Run attendance endpoint discovery in background (will use presence API now)
-  try {
-    const attendanceService = require('./services/attendanceService');
-    attendanceService.discoverZohoEndpoint()
-      .then(endpoint => {
-        if (endpoint) {
-          console.log(`[Startup] ✅ Zoho attendance API working: ${endpoint}`);
-        } else {
-          console.log('[Startup] Zoho attendance API not available — Slack fallback active');
-          console.log('[Startup]   To enable real-time attendance: configure Zoho webhook');
-          console.log('[Startup]   Zoho People → Settings → Integrations → Webhooks');
-          console.log('[Startup]   Webhook URL: /api/webhooks/zoho-attendance');
-        }
-      })
-      .catch(err => console.warn('[Startup] Endpoint discovery error:', err.message));
-  } catch (_) { /* non-fatal */ }
+  // 6f. Attendance sources: Zoho webhook (real-time, if configured in Zoho
+  // People → Settings → Integrations → Webhooks) > Zoho Chat presence > Slack
+  // fallback. The old Zoho People attendance REST API polling was removed —
+  // it returned error 7201 (module disabled) on every endpoint variant tried.
+  console.log('[Startup] Attendance sources: Zoho webhook > Zoho presence > Slack fallback');
+  console.log('[Startup]   Webhook URL: /api/webhooks/zoho-attendance');
 
   // 7. Start Express
   app.listen(PORT, () => {

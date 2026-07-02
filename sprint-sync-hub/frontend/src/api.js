@@ -1,8 +1,8 @@
-import { API_BASE } from './config.js';
+import { API_BASE, apiHeaders } from './config.js';
 
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: apiHeaders({ 'Content-Type': 'application/json', ...options.headers }),
     ...options,
   });
   const data = await res.json();

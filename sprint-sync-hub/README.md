@@ -9,16 +9,16 @@ Sprint-Sync Hub is an AI-powered automation system that connects your team's Sla
 - **Bulk / multi-day standup detection** — Claude detects when a member posts several days' worth of updates in one message and records each date separately.
 - **Mismatch detection & handling** — flags updates that reference an unassigned task or a different project, DMs the member, alerts the team lead, and logs the event (`mismatch_events` table). Includes a 4-hour idempotency window to avoid duplicate DMs.
 - **No-match nudge DMs** — if a message can't be matched to any Jira task, Claude drafts a DM asking the member to update Jira.
-- **End-of-day (EOD) missing-update check** — DMs anyone who hasn't posted a standup or whose post didn't match a task; skips members on approved leave or who checked out early (Zoho-aware).
+- **End-of-day (EOD) missing-update check** — DMs anyone who hasn't posted a standup or whose post didn't match a task; skips members who show absent or who checked out early, based on unified attendance data (Zoho webhook > Zoho presence > Slack fallback).
 - **Deadline / overdue check** — daily scan for overdue Jira issues, DMs the assignee with days-overdue context.
-- **Checkout-without-standup detection** — polls Zoho presence every 15 minutes (4:30–7:30 PM) and DMs anyone who checked out without posting a standup.
+- **Checkout-without-standup detection** — polls every 15 minutes (4:30–7:30 PM) for real Zoho webhook checkout events and DMs anyone who checked out without posting a standup.
+- **Role-based DM gating** — managerial-only members are exempt from all automated task/standup DMs (huddle-sync no-match, EOD reminders, deadline alerts, checkout nudges, mismatch alerts).
 - **Weekly sprint report** — Claude generates a summary (with leaderboard + at-risk members) and posts it to the channel and/or DMs the manager, on a configurable day/time.
 
 ### AI-Assisted Sprint Planning & Task Assignment
 - **Sprint goal breakdown** — paste a sprint goal, Claude breaks it into individual Jira-ready tasks.
-- **Smart task assignment** — ranks team members per task using skill profile match, current workload, past performance, and leave status; creates the sprint and issues directly in Jira with assignees pre-filled.
+- **Smart task assignment** — ranks team members per task using skill profile match, current workload, and past performance; creates the sprint and issues directly in Jira with assignees pre-filled.
 - **Skill extraction** — Claude extracts skills/technologies mentioned in standup messages and builds a per-member skill profile over time (cached, rebuildable).
-- **Assignment engine / re-ranking** — standalone endpoint to re-rank candidate members for a given task using skill + performance + availability scoring.
 
 ### Performance Tracking
 - **Daily stats & streaks** — tracks standups posted, Jira syncs, missed days, and posting streaks per member per sprint.
@@ -28,7 +28,7 @@ Sprint-Sync Hub is an AI-powered automation system that connects your team's Sla
 
 ### Attendance (Zoho Integration)
 - **Zoho OAuth flow** — one-click authorization to grant attendance scopes.
-- **Zoho People/Presence sync** — pulls check-in/check-out and leave data, with webhook support and a Slack-presence fallback when the Zoho People API is unavailable.
+- **Unified attendance sync** — merges three sources in priority order: Zoho webhook (real-time check-in/out, if configured in Zoho People → Settings → Integrations → Webhooks) overrides Zoho Chat presence (online/offline signal), which overrides a Slack-activity fallback (first message of the day) for anyone the above missed. The Zoho People Attendance/Leave REST API is not used — it returns error 7201 (module disabled) on this account, so there is currently no reliable leave-detection signal.
 - **Feature flag toggle** — Zoho attendance can be turned on/off from Settings without a redeploy; all attendance-dependent cron logic checks this flag.
 - **Attendance history** — per-member and team-wide attendance history views.
 
@@ -40,6 +40,7 @@ Sprint-Sync Hub is an AI-powered automation system that connects your team's Sla
 
 ### Configuration & Admin
 - **DB-backed config service** — sprint settings, team members, and connections are stored in Postgres with env-var fallback and in-memory caching; credentials are encrypted at rest (`cryptoService`).
+- **API authentication** — every `/api` route (except `/api/health` and the Zoho webhook, which can't send custom headers) requires an `x-api-key` header matching `API_AUTH_TOKEN`. Without it set, the API is open — set it before deploying anywhere reachable from the internet.
 - **Connections health check** — verifies Slack, Jira, and Anthropic credentials from the dashboard.
 - **Activity / sync log** — every automated action (matches, DMs, errors) is logged and viewable from the dashboard.
 - **Manual sync trigger & Jira actions** — run the huddle sync on demand, browse issues/overdue tasks, post comments, and transition statuses directly from the UI.

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_BASE } from './config.js';
+import { API_BASE, apiHeaders } from './config.js';
 
 /**
  * ZohoCallbackPage
@@ -35,7 +35,7 @@ export default function ZohoCallbackPage() {
     // Exchange the code for a refresh token
     fetch(`${API_BASE}/api/zoho/oauth/exchange`, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body:    JSON.stringify({ code }),
     })
       .then(async (r) => {
@@ -133,7 +133,7 @@ export default function ZohoCallbackPage() {
               <button
                 style={{ ...styles.btn, background: '#6B7280' }}
                 onClick={async () => {
-                  const r = await fetch(`${API_BASE}/api/zoho/oauth/url`);
+                  const r = await fetch(`${API_BASE}/api/zoho/oauth/url`, { headers: apiHeaders() });
                   const { authUrl } = await r.json();
                   window.location.href = authUrl;
                 }}
