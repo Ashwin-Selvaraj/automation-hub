@@ -311,8 +311,19 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
   const standup_days_expected = effectiveDays.length;
 
   const posts = await standupRepo.getPostsForMemberInSprint(memberId, sprintId);
-  const standup_days_posted = posts.length;
+  // Dedupe by post_date — posting twice in one day must not count as two
+  // "days posted" (that would let a single day of double-posting look like
+  // 100% attendance early in a sprint).
+  const distinctPostDates = new Set(posts.map((p) => toDateStr(p.post_date)));
+  const standup_days_posted = distinctPostDates.size;
   const { currentStreak, maxStreak } = computeStreaks(posts, effectiveDays);
+
+  // Days where the only "post" was a later bulk/retroactive catch-up message
+  // describing that date — these do NOT count toward standup_days_posted
+  // above (a catch-up is not the same as posting on the day), but they do
+  // feed a scoring penalty below so dumping updates in one message is a
+  // measurably worse outcome than posting daily.
+  const bulk_standup_posts = dailyStatsFull.filter((d) => d.is_bulk_post === true).length;
 
   const taskCounts = await taskRepo.countByStatus(sprintId, memberId);
   const deadlineEvents = await deadlineRepo.getByMemberAndSprint(memberId, sprintId);
@@ -372,6 +383,7 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
   const summaryData = {
     standup_days_posted,
     standup_days_expected,
+    bulk_standup_posts,
     standup_streak_max:     maxStreak,
     standup_streak_current: currentStreak,
     tasks_assigned:    taskCounts.total,
@@ -485,7 +497,7 @@ function buildRiskReason(m) {
     ? m.standup_days_posted / m.standup_days_expected : 1;
   const deadlineRate = m.deadlines_total > 0
     ? m.deadlines_hit / m.deadlines_total : 1;
-  if (standupRate < 0.6) reasons.push(`${Math.round(standupRate * 100)}% standup attendance`);
+  if (standupRate < 0.6) reasons.push(`posted ${m.standup_days_posted}/${m.standup_days_expected} working days`);
   if (deadlineRate < 0.7) reasons.push(`${m.deadlines_missed} deadline(s) missed`);
   if (parseFloat(m.performance_score) < 50) reasons.push(`score ${m.performance_score}`);
   return reasons.join(', ') || 'low performance score';

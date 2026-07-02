@@ -132,6 +132,11 @@ router.get('/history', async (req, res) => {
       const checkedOut    = stat ? (stat.check_out_time != null) : false;
       const postedStandup = standup != null;
       const checkedIn     = stat ? (stat.checked_in !== false) : false;
+      // Covered only via a later bulk/retroactive catch-up message that
+      // mentioned this date — not a same-day post. Distinct from postedStandup
+      // so the UI can show "caught up late" instead of a plain miss or a
+      // genuine on-time post.
+      const bulkCatchup   = !postedStandup && stat?.is_bulk_post === true;
 
       return {
         date,
@@ -141,6 +146,8 @@ router.get('/history', async (req, res) => {
           ? String(stat.check_out_time).substring(0, 5)
           : null,
         postedStandup,
+        bulkCatchup,
+        standupStatus: isWeekend ? 'weekend' : postedStandup ? 'posted' : bulkCatchup ? 'bulk' : 'missed',
         standupPostTime: standup?.created_at
           ? new Date(standup.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
           : null,
@@ -150,13 +157,17 @@ router.get('/history', async (req, res) => {
       };
     });
 
-    // Summary counters
+    // Summary counters (per working day, mutually exclusive buckets)
     const workdays = history.filter((d) => !d.isWeekend);
     const summary  = {
+      postedOnTime:    workdays.filter((d) => d.postedStandup).length,
+      bulkCatchupDays: workdays.filter((d) => d.bulkCatchup).length,
+      missed:          workdays.filter((d) => !d.postedStandup && !d.bulkCatchup && !d.absent && !d.onLeave).length,
+      absent:          workdays.filter((d) => d.absent).length,
+      onLeave:         workdays.filter((d) => d.onLeave).length,
+      // Legacy fields kept for any other consumers of this endpoint
       checkoutWithStandup:    workdays.filter((d) => d.checkedOut && d.postedStandup).length,
       checkoutWithoutStandup: workdays.filter((d) => d.checkedOut && !d.postedStandup).length,
-      absent:                 workdays.filter((d) => d.absent).length,
-      onLeave:                workdays.filter((d) => d.onLeave).length,
     };
 
     res.json({ memberId, days, history, summary });

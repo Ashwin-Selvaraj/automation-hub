@@ -755,11 +755,14 @@ function MemberDrawer({ memberId, onClose }) {
               </>
             )}
 
-            {/* Checkout vs Standup — Last 30 Days */}
+            {/* Standup Consistency — Last 30 Days */}
             {checkoutHistory && checkoutHistory.history && checkoutHistory.history.length > 0 && (
               <>
                 <Divider />
-                <SectionLabel>Checkout vs Standup — Last 30 Days</SectionLabel>
+                <SectionLabel>Standup Consistency — Last 30 Days</SectionLabel>
+                <p style={{ fontSize: 11, color: colors.gray400, fontFamily: fonts.body, margin: '-6px 0 10px' }}>
+                  Green = posted that day. Amber = only covered later via a bulk catch-up message — doesn't count as on-time.
+                </p>
                 {/* Calendar grid: 6 cols × 5 rows = 30 days */}
                 <div style={{
                   display: 'grid',
@@ -775,9 +778,11 @@ function MemberDrawer({ memberId, onClose }) {
                       bg = '#E0E7FF'; symbol = 'L'; title = day.date + ' — On leave';
                     } else if (day.absent) {
                       bg = '#F3F4F6'; symbol = '–'; title = day.date + ' — Absent';
-                    } else if (day.checkedOut && day.postedStandup) {
-                      bg = '#DCF7E8'; symbol = '✓'; title = day.date + ` — Checked out ${day.checkOutTime || ''}, standup posted`;
-                    } else if (day.checkedOut && !day.postedStandup) {
+                    } else if (day.postedStandup) {
+                      bg = '#DCF7E8'; symbol = '✓'; title = day.date + ` — Standup posted${day.checkedOut ? ` · checked out ${day.checkOutTime || ''}` : ''}`;
+                    } else if (day.bulkCatchup) {
+                      bg = '#FDE68A'; symbol = '⏱'; title = day.date + ' — No update that day; only covered later in a bulk catch-up message (does not count as on-time)';
+                    } else if (day.checkedOut) {
                       bg = '#FEF3C7'; symbol = '!'; title = day.date + ` — Checked out ${day.checkOutTime || ''}, no standup`;
                     } else {
                       bg = '#DBEAFE'; symbol = '→'; title = day.date + ' — Still in / ongoing';
@@ -793,8 +798,9 @@ function MemberDrawer({ memberId, onClose }) {
                           fontSize: day.isWeekend ? 0 : 11, fontWeight: 700,
                           color: day.onLeave ? '#4338CA' :
                                  day.absent  ? colors.gray400 :
-                                 day.checkedOut && day.postedStandup ? '#065F46' :
-                                 day.checkedOut ? '#92400E' : '#1E40AF',
+                                 day.postedStandup ? '#065F46' :
+                                 day.bulkCatchup    ? '#92400E' :
+                                 day.checkedOut     ? '#92400E' : '#1E40AF',
                           cursor: 'default',
                           border: day.isWeekend ? 'none' : `1px solid ${bg === 'transparent' ? 'transparent' : bg + 'cc'}`,
                         }}
@@ -809,8 +815,11 @@ function MemberDrawer({ memberId, onClose }) {
                   display: 'flex', gap: 18, flexWrap: 'wrap',
                   fontSize: 11, color: colors.gray500, fontFamily: fonts.body, marginBottom: 18,
                 }}>
-                  <span><strong style={{ color: '#065F46' }}>{checkoutHistory.summary.checkoutWithStandup}</strong> checkout + standup</span>
-                  <span><strong style={{ color: '#92400E' }}>{checkoutHistory.summary.checkoutWithoutStandup}</strong> checkout without standup</span>
+                  <span><strong style={{ color: '#065F46' }}>{checkoutHistory.summary.postedOnTime}</strong> posted on time</span>
+                  {checkoutHistory.summary.bulkCatchupDays > 0 && (
+                    <span><strong style={{ color: '#92400E' }}>{checkoutHistory.summary.bulkCatchupDays}</strong> bulk catch-up (late)</span>
+                  )}
+                  <span><strong style={{ color: '#92400E' }}>{checkoutHistory.summary.missed}</strong> missed entirely</span>
                   <span><strong style={{ color: colors.gray400 }}>{checkoutHistory.summary.absent}</strong> absent</span>
                   {checkoutHistory.summary.onLeave > 0 && (
                     <span><strong style={{ color: '#4338CA' }}>{checkoutHistory.summary.onLeave}</strong> on leave</span>
