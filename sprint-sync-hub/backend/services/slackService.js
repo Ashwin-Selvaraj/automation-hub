@@ -90,28 +90,6 @@ async function postToChannel(channelId, text) {
 }
 
 /**
- * Retrieves display name and real name for a Slack user.
- * @param {string} userId - Slack user ID
- * @returns {Promise<{ id: string, displayName: string, realName: string, email: string }>}
- */
-async function getUserInfo(userId) {
-  try {
-    const slack = getClient();
-    const res = await slack.users.info({ user: userId });
-    const profile = res.user.profile;
-    return {
-      id: userId,
-      displayName: profile.display_name || profile.real_name || userId,
-      realName: profile.real_name || userId,
-      email: profile.email || '',
-    };
-  } catch (err) {
-    const msg = err.data?.error || err.message;
-    throw new Error(`Slack getUserInfo for ${userId} failed: ${msg}`);
-  }
-}
-
-/**
  * Tests the Slack connection by calling auth.test.
  * @returns {Promise<boolean>}
  */
@@ -208,7 +186,6 @@ module.exports = {
   getChannelMessages,
   sendDM,
   postToChannel,
-  getUserInfo,
   testConnection,
   fetchAndStoreSlackEmails,
 };

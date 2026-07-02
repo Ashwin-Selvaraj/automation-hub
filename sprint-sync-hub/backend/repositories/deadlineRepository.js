@@ -66,24 +66,6 @@ async function incrementReminderCount(deadlineEventId) {
   }
 }
 
-async function getMissedDeadlines(organisationId, sprintId) {
-  try {
-    const { rows } = await db.query(
-      `SELECT de.*, t.jira_key, t.title AS task_title, m.name AS member_name
-       FROM deadline_events de
-       JOIN tasks t ON de.task_id = t.id
-       JOIN members m ON de.member_id = m.id
-       WHERE de.organisation_id = $1 AND de.sprint_id = $2 AND de.status = 'missed'
-       ORDER BY de.days_overdue DESC`,
-      [organisationId, sprintId]
-    );
-    return rows;
-  } catch (err) {
-    console.error('[deadlineRepository.getMissedDeadlines]', err.message);
-    throw err;
-  }
-}
-
 async function findByTaskId(taskId) {
   try {
     const { rows } = await db.query(
@@ -100,5 +82,5 @@ async function findByTaskId(taskId) {
 module.exports = {
   recordDeadlineEvent, getByMemberAndSprint,
   updateStatus, incrementReminderCount,
-  getMissedDeadlines, findByTaskId,
+  findByTaskId,
 };

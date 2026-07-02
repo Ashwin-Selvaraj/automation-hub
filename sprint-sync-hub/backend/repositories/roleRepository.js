@@ -146,19 +146,6 @@ async function findById(roleId) {
   }
 }
 
-async function findBySlug(organisationId, slug) {
-  try {
-    const { rows } = await db.query(
-      'SELECT * FROM roles WHERE organisation_id = $1 AND slug = $2',
-      [organisationId, slug]
-    );
-    return rows[0] || null;
-  } catch (err) {
-    console.error('[roleRepository.findBySlug]', err.message);
-    throw err;
-  }
-}
-
 async function create(organisationId, roleData) {
   try {
     const slug = roleData.slug || roleData.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -285,4 +272,4 @@ async function seedDefaults(organisationId) {
   }
 }
 
-module.exports = { findAll, findById, findBySlug, create, update, deactivate, seedDefaults, SYSTEM_ROLES };
+module.exports = { findAll, findById, create, update, deactivate, seedDefaults, SYSTEM_ROLES };

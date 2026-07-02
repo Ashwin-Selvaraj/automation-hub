@@ -144,27 +144,6 @@ async function setMany(updates, opts = {}) {
 }
 
 /**
- * Returns all config for a given category.
- * Secrets are masked for display.
- */
-async function getCategory(category) {
-  await ensureLoaded();
-  const result = {};
-  for (const [key, def] of Object.entries(CONFIG_DEFS)) {
-    if (def.category !== category) continue;
-    const raw = cache[key] ?? envValue(key) ?? null;
-    result[key] = {
-      label:     def.label,
-      isSecret:  def.isSecret,
-      isSet:     raw != null && raw !== '',
-      value:     def.isSecret ? null : raw,
-      preview:   def.isSecret ? mask(raw) : null,
-    };
-  }
-  return result;
-}
-
-/**
  * Returns the full structured config object (equivalent of old getSprintConfig).
  * This is what the rest of the app uses.
  */
@@ -248,7 +227,6 @@ module.exports = {
   getSync,
   set,
   setMany,
-  getCategory,
   getSprintConfig,
   seedFromEnv,
   init,

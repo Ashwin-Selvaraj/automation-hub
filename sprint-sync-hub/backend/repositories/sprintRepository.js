@@ -58,19 +58,6 @@ async function findById(sprintId) {
   }
 }
 
-async function listAll(organisationId) {
-  try {
-    const { rows } = await db.query(
-      'SELECT * FROM sprints WHERE organisation_id = $1 ORDER BY start_date DESC',
-      [organisationId]
-    );
-    return rows;
-  } catch (err) {
-    console.error('[sprintRepository.listAll]', err.message);
-    throw err;
-  }
-}
-
 async function upsertSprint(organisationId, name, startDate, endDate, durationWeeks) {
   try {
     const { rows } = await db.query(
@@ -100,4 +87,4 @@ async function upsertSprint(organisationId, name, startDate, endDate, durationWe
   }
 }
 
-module.exports = { createSprint, getActiveSprint, setActive, findById, listAll, upsertSprint };
+module.exports = { createSprint, getActiveSprint, setActive, findById, upsertSprint };
