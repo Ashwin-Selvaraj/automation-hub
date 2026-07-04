@@ -342,6 +342,32 @@ async function getMembersWhoReceiveDMs(organisationId) {
   }
 }
 
+// ─── getManagerialMemberKeys ──────────────────────────────────────────────────
+// Members holding ANY managerial role (Team Lead, Process Manager, etc.), even
+// if they also hold a technical role. This app only tracks individual-
+// contributor activity/performance — used to exclude managers from Report,
+// Overview At-Risk, the Performance tab, and the Sync activity log.
+async function getManagerialMemberKeys(organisationId) {
+  try {
+    const { rows } = await query(
+      `SELECT DISTINCT m.id, m.name, m.slack_user_id
+       FROM members m
+       JOIN member_roles mr ON mr.member_id = m.id AND mr.is_active = true
+       JOIN roles r ON r.id = mr.role_id AND r.is_active = true AND r.role_type = 'managerial'
+       WHERE m.organisation_id = $1`,
+      [organisationId]
+    );
+    return {
+      memberIds:    new Set(rows.map((r) => r.id)),
+      slackUserIds: new Set(rows.map((r) => r.slack_user_id).filter(Boolean)),
+      names:        new Set(rows.map((r) => r.name)),
+    };
+  } catch (err) {
+    console.error('[memberRoleRepository.getManagerialMemberKeys]', err.message);
+    throw err;
+  }
+}
+
 // ─── getRoleHistory ───────────────────────────────────────────────────────────
 
 async function getRoleHistory(memberId) {
@@ -371,6 +397,7 @@ module.exports = {
   setMemberRoles,
   getMembersWithRole,
   getMembersWhoReceiveDMs,
+  getManagerialMemberKeys,
   getRoleHistory,
 };
 

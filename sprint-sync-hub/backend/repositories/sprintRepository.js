@@ -58,6 +58,19 @@ async function findById(sprintId) {
   }
 }
 
+async function getMostRecent(organisationId) {
+  try {
+    const { rows } = await db.query(
+      'SELECT * FROM sprints WHERE organisation_id = $1 ORDER BY end_date DESC, id DESC LIMIT 1',
+      [organisationId]
+    );
+    return rows[0] || null;
+  } catch (err) {
+    console.error('[sprintRepository.getMostRecent]', err.message);
+    throw err;
+  }
+}
+
 async function upsertSprint(organisationId, name, startDate, endDate, durationWeeks) {
   try {
     const { rows } = await db.query(
@@ -72,12 +85,20 @@ async function upsertSprint(organisationId, name, startDate, endDate, durationWe
     );
     return rows[0] || null;
   } catch (err) {
-    // If no unique constraint on name yet, fall back to insert-or-get
+    // No unique constraint on (organisation_id, name), so ON CONFLICT above
+    // always throws — fall back to update-or-insert by hand.
     const existing = await db.query(
       'SELECT * FROM sprints WHERE organisation_id = $1 AND name = $2',
       [organisationId, name]
     );
-    if (existing.rows.length > 0) return existing.rows[0];
+    if (existing.rows.length > 0) {
+      const { rows } = await db.query(
+        `UPDATE sprints SET start_date = $1, end_date = $2, duration_weeks = $3
+         WHERE id = $4 RETURNING *`,
+        [startDate, endDate, durationWeeks || 2, existing.rows[0].id]
+      );
+      return rows[0];
+    }
     const ins = await db.query(
       `INSERT INTO sprints (organisation_id, name, start_date, end_date, duration_weeks)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -87,4 +108,4 @@ async function upsertSprint(organisationId, name, startDate, endDate, durationWe
   }
 }
 
-module.exports = { createSprint, getActiveSprint, setActive, findById, upsertSprint };
+module.exports = { createSprint, getActiveSprint, setActive, findById, getMostRecent, upsertSprint };

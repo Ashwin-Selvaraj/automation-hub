@@ -19,7 +19,7 @@ function getClient() {
   return anthropic;
 }
 
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-opus-4-8';
 const MAX_TOKENS = 1000;
 
 const MATCH_SYSTEM_PROMPT = `You are a Jira automation assistant. Analyse a developer's standup message and determine if it refers to one of the provided Jira tasks. Use semantic understanding, not just keywords. Consider: task title similarity, technical terms, feature names, action verbs (completed, fixed, deployed, working on, reviewed, merged). Respond ONLY with valid JSON matching the exact schema provided. No preamble, no explanation.

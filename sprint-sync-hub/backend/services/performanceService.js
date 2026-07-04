@@ -310,13 +310,25 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
   const effectiveDays = allWorkingDays.filter((d) => !leaveOrAbsentDates.has(d));
   const standup_days_expected = effectiveDays.length;
 
-  const posts = await standupRepo.getPostsForMemberInSprint(memberId, sprintId);
+  const sprintStartStr = toDateStr(sprint.start_date);
+  const effectiveEndStr = toDateStr(effectiveEnd);
+
+  // sprint_id alone isn't a reliable date boundary — a sprint whose dates get
+  // edited (or that's reused past its original end date) can have posts
+  // attached to it from well outside its actual window. Scope to the sprint's
+  // real date range so a stale/reused sprint_id can't inflate the count.
+  const postsInWindow = (await standupRepo.getPostsForMemberInSprint(memberId, sprintId))
+    .filter((p) => {
+      const d = toDateStr(p.post_date);
+      return d >= sprintStartStr && d <= effectiveEndStr;
+    });
+
   // Dedupe by post_date — posting twice in one day must not count as two
   // "days posted" (that would let a single day of double-posting look like
   // 100% attendance early in a sprint).
-  const distinctPostDates = new Set(posts.map((p) => toDateStr(p.post_date)));
+  const distinctPostDates = new Set(postsInWindow.map((p) => toDateStr(p.post_date)));
   const standup_days_posted = distinctPostDates.size;
-  const { currentStreak, maxStreak } = computeStreaks(posts, effectiveDays);
+  const { currentStreak, maxStreak } = computeStreaks(postsInWindow, effectiveDays);
 
   // Days where the only "post" was a later bulk/retroactive catch-up message
   // describing that date — these do NOT count toward standup_days_posted
@@ -464,20 +476,46 @@ async function getMemberProfile(organisationId, memberId) {
   return { member, currentSprint, currentSummary, history, trend, overallStats, recentActivity };
 }
 
+/**
+ * Recomputes member_sprint_summary for every active member of a sprint.
+ * Previously this only ran once a week (the Friday report cron), so the
+ * leaderboard/at-risk/dashboard views could show numbers up to a week stale.
+ * Cheap enough (a handful of DB queries per member, no external API calls)
+ * to run on every dashboard load instead.
+ */
+async function refreshAllMemberSummaries(organisationId, sprintId) {
+  if (!sprintId) return;
+  const members = await memberRepo.findAll(organisationId);
+  const { memberIds: managerialIds } = await memberRoleRepository.getManagerialMemberKeys(organisationId);
+  for (const m of members) {
+    if (managerialIds.has(m.id)) continue; // this app tracks IC activity only
+    try {
+      await computeSprintSummary(organisationId, sprintId, m.id);
+    } catch (err) {
+      console.error('[performanceService.refreshAllMemberSummaries]', m.name, err.message);
+    }
+  }
+}
+
 async function getTeamLeaderboard(organisationId, sprintId) {
   const rows = await statsRepo.getLeaderboard(organisationId, sprintId);
-  return rows.map((r, i) => ({
-    ...r,
-    rank: i + 1,
-    trend: 'stable',
-    riskLevel: scoringService.getRiskLevel(r),
-    label: scoringService.getPerformanceLabel(parseFloat(r.performance_score)),
-  }));
+  const { memberIds: managerialIds } = await memberRoleRepository.getManagerialMemberKeys(organisationId);
+  return rows
+    .filter((r) => !managerialIds.has(r.member_id))
+    .map((r, i) => ({
+      ...r,
+      rank: i + 1,
+      trend: 'stable',
+      riskLevel: scoringService.getRiskLevel(r),
+      label: scoringService.getPerformanceLabel(parseFloat(r.performance_score)),
+    }));
 }
 
 async function getAtRiskMembers(organisationId, sprintId) {
   const all = await statsRepo.getAllSprintSummaries(sprintId);
+  const { memberIds: managerialIds } = await memberRoleRepository.getManagerialMemberKeys(organisationId);
   return all.filter((m) => {
+    if (managerialIds.has(m.member_id)) return false; // this app tracks IC activity only
     const standupRate = m.standup_days_expected > 0
       ? m.standup_days_posted / m.standup_days_expected : 1;
     const deadlineRate = m.deadlines_total > 0
@@ -599,6 +637,7 @@ module.exports = {
   recordNoMatchDM,
   runDailyDeadlineCheck,
   computeSprintSummary,
+  refreshAllMemberSummaries,
   getMemberProfile,
   getTeamLeaderboard,
   getAtRiskMembers,

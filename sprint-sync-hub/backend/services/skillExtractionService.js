@@ -12,7 +12,7 @@ const memberRepo   = require('../repositories/memberRepository');
 const standupRepo  = require('../repositories/standupRepository');
 const sprintRepo   = require('../repositories/sprintRepository');
 
-const MODEL = 'claude-haiku-4-20250514'; // lighter model for bulk extraction
+const MODEL = 'claude-haiku-4-5'; // lighter model for bulk extraction
 
 let _anthropic = null;
 function getClient() {

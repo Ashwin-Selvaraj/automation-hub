@@ -66,10 +66,22 @@ function buildAssignmentSummary(tasks) {
   };
 }
 
+// ─── GET /api/sprint-planning/carryover ──────────────────────────────────────
+
+router.get('/carryover', async (req, res) => {
+  try {
+    const result = await sprintPlanningService.getCarryoverCandidates(ORG_ID());
+    return res.json(result);
+  } catch (err) {
+    console.error('[GET /sprint-planning/carryover]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── POST /api/sprint-planning/breakdown ─────────────────────────────────────
 
 router.post('/breakdown', async (req, res) => {
-  const { goalText, sprintName, startDate, endDate, projectId } = req.body;
+  const { goalText, sprintName, startDate, endDate, projectId, carryoverTaskIds } = req.body;
 
   if (!goalText || !sprintName || !startDate || !endDate) {
     return res.status(400).json({
@@ -81,7 +93,7 @@ router.post('/breakdown', async (req, res) => {
 
   try {
     const tasks = await sprintPlanningService.breakdownSprintGoal(
-      goalText, sprintName, startDate, endDate, orgId, projectId || null
+      goalText, sprintName, startDate, endDate, orgId, projectId || null, carryoverTaskIds || []
     );
 
     // Extract and remove the warning flag if present

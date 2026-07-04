@@ -12,7 +12,7 @@ const taskRepo              = require('../repositories/taskRepository');
 const statsRepo             = require('../repositories/statsRepository');
 const memberRoleRepository  = require('../repositories/memberRoleRepository');
 
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-opus-4-8';
 
 let _anthropic = null;
 function getAnthropicClient() {
@@ -293,9 +293,69 @@ async function enrichTasksWithAssignments(tasks, members, currentTaskCounts, per
   return enriched;
 }
 
+// ─── Carryover from previous sprint ───────────────────────────────────────────
+
+/**
+ * Incomplete tasks from the most recent sprint, offered as opt-in suggestions
+ * when planning the next one. Read-only — nothing is selected/merged until the
+ * caller passes matching IDs back into breakdownSprintGoal via carryoverTaskIds.
+ */
+async function getCarryoverCandidates(organisationId) {
+  const orgId = organisationId || parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const previousSprint = await sprintRepo.getMostRecent(orgId);
+  if (!previousSprint) return { previousSprint: null, tasks: [] };
+
+  const incomplete = await taskRepo.getIncompleteTasksBySprint(previousSprint.id);
+  const today = new Date().toISOString().split('T')[0];
+
+  const tasks = incomplete.map((t) => ({
+    taskId:       t.id,
+    jiraKey:      t.jira_key,
+    title:        t.title,
+    status:       t.status,
+    priority:     t.priority || 'Medium',
+    domain:       detectDomain({ title: t.title }),
+    dueDate:      t.due_date,
+    assigneeId:   t.assignee_id,
+    assigneeName: t.assignee_name || null,
+    overdue:      t.due_date ? String(t.due_date).split('T')[0] < today : false,
+  }));
+
+  return {
+    previousSprint: { id: previousSprint.id, name: previousSprint.name, endDate: previousSprint.end_date },
+    tasks,
+  };
+}
+
+/** Converts an approved carryover candidate into the same shape enrichTasksWithAssignments produces. */
+function buildCarryoverTask(row, membersById, newSprintStartDate) {
+  const assignee = row.assignee_id ? membersById.get(row.assignee_id) : null;
+  return {
+    title:            row.title,
+    description:      `Carried over from last sprint (${row.jira_key}) — was not completed.`,
+    domain:           detectDomain({ title: row.title }),
+    priority:         row.priority || 'Medium',
+    estimatedDays:    2,
+    suggestedDueDate: newSprintStartDate,
+    skillTags:        [],
+    assignmentReason: assignee ? 'Carried over — same assignee as last sprint' : 'Carried over — previous assignee unavailable, needs manual assignment',
+    suggestedAssigneeId:      assignee ? assignee.memberId : null,
+    suggestedAssigneeName:    assignee ? assignee.name : null,
+    assignmentScore:          assignee ? 100 : 0,
+    assignmentReasons:        assignee ? ['Carried over from last sprint — same assignee'] : ['Previous assignee no longer assignable — pick manually'],
+    alternativeAssigneeId:    null,
+    alternativeAssigneeName:  null,
+    allRankings:              [],
+    requiresManualAssignment: !assignee,
+    carriedOver:              true,
+    originalJiraKey:          row.jira_key,
+    originalTaskId:           row.id,
+  };
+}
+
 // ─── Main breakdown function ──────────────────────────────────────────────────
 
-async function breakdownSprintGoal(goalText, sprintName, startDate, endDate, organisationId, projectId) {
+async function breakdownSprintGoal(goalText, sprintName, startDate, endDate, organisationId, projectId, carryoverTaskIds) {
   const orgId      = organisationId || parseInt(process.env.ORGANISATION_ID || '1', 10);
   const workingDays = countWorkingDays(startDate, endDate);
   const client     = getAnthropicClient();
@@ -485,11 +545,25 @@ Remember: backend tasks → backend/fullstack only. Frontend tasks → frontend/
     skillProfiles,
   );
 
-  if (heavyWarning) {
-    enrichedTasks._warning = heavyWarning;
+  // ── 10. Prepend approved carryover tasks from the previous sprint ───────────
+  // These bypass Claude and the ranking logic — the previous assignee is kept
+  // as-is (or flagged for manual assignment if they're no longer assignable).
+  let carriedOverTasks = [];
+  if (carryoverTaskIds && carryoverTaskIds.length > 0) {
+    const membersById = new Map(assignableMembers.map((m) => [m.memberId, m]));
+    const rows = await taskRepo.getByIds(orgId, carryoverTaskIds);
+    carriedOverTasks = rows
+      .filter((r) => r.completed_at === null)
+      .map((r) => buildCarryoverTask(r, membersById, startDate));
   }
 
-  return enrichedTasks;
+  const allTasks = [...carriedOverTasks, ...enrichedTasks];
+
+  if (heavyWarning) {
+    allTasks._warning = heavyWarning;
+  }
+
+  return allTasks;
 }
 
 // ─── Validate assignment plan before Jira creation ────────────────────────────
@@ -576,6 +650,20 @@ async function createSprintFromPlan(sprintData, tasks, assignmentMap) {
   } catch (err) {
     console.error('[sprintPlanningService] DB sprint save error:', err.message);
     dbSprint = { id: null };
+  }
+
+  // Keep app_config's sprint window (env-var backed, drives cron.js's Slack
+  // sync scoping) in step with the sprint just created here — otherwise
+  // huddle sync/EOD checks keep watching the previous sprint's dates while
+  // performance scoring measures this new one.
+  try {
+    await configService.setMany({
+      'sprint.name':           name,
+      'sprint.start_date':     startDate,
+      'sprint.duration_weeks': String(durationWeeks),
+    });
+  } catch (err) {
+    console.error('[sprintPlanningService] app_config sprint sync error:', err.message);
   }
 
   // ── Resolve Jira account IDs ───────────────────────────────────────────────
@@ -707,6 +795,7 @@ async function createSprintFromPlan(sprintData, tasks, assignmentMap) {
 module.exports = {
   breakdownSprintGoal,
   createSprintFromPlan,
+  getCarryoverCandidates,
   countWorkingDays,
   detectDomain,
   getEligiblePool,

@@ -8,6 +8,11 @@ const jiraService = require('../services/jiraService');
 const { getSprintWindow, getSprintWeeks, toUnixTimestamp, getWorkingDaysSince } = require('../utils/dateUtils');
 const { getSprintConfig } = require('../utils/sprintConfig');
 const activityLog = require('../services/activityLog');
+const memberRoleRepository = require('../repositories/memberRoleRepository');
+
+function orgId() {
+  return parseInt(process.env.ORGANISATION_ID || '1', 10);
+}
 
 /**
  * Builds member activity data from Slack messages for a given time window.
@@ -59,12 +64,15 @@ router.post('/generate', async (req, res) => {
     const latest = Math.min(windowEnd.getTime() / 1000, Date.now() / 1000);
     const workingDays = getWorkingDaysSince(windowStart.toISOString().split('T')[0]);
 
-    const [rawMessages, jiraTasks] = await Promise.all([
+    const [rawMessages, jiraTasks, managerialKeys] = await Promise.all([
       slackService.getChannelMessages(cfg.channelId, oldest, latest),
       jiraService.getSprintIssues(cfg.projectKey, startStr, endStr),
+      memberRoleRepository.getManagerialMemberKeys(orgId()),
     ]);
 
-    const memberActivity = buildMemberActivity(rawMessages, cfg.teamMembers, workingDays);
+    // This app tracks IC activity/performance only — exclude managerial members.
+    const trackedMembers = cfg.teamMembers.filter((m) => !managerialKeys.slackUserIds.has(m.id));
+    const memberActivity = buildMemberActivity(rawMessages, trackedMembers, workingDays);
     const reportText = await claudeService.generateWeeklyReport(weekLabel, memberActivity, jiraTasks, cfg.sprintName);
 
     activityLog.addEntry({

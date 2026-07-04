@@ -18,6 +18,7 @@ const featureFlags    = require('./services/featureFlags');
 const standupRepo     = require('./repositories/standupRepository');
 const mismatchService = require('./services/mismatchService');
 const taskRepo        = require('./repositories/taskRepository');
+const memberRoleRepository = require('./repositories/memberRoleRepository');
 
 let lastSyncTs = null;
 
@@ -447,24 +448,20 @@ function startCronJobs() {
       let leaderboard = [];
       let atRisk      = [];
       if (sprintId) {
-        const members = await memberRepo.findAll(orgId);
-        for (const m of members) {
-          try {
-            await performanceService.computeSprintSummary(orgId, sprintId, m.id);
-          } catch (perfErr) {
-            console.error('[cron] computeSprintSummary error:', perfErr.message);
-          }
-        }
+        await performanceService.refreshAllMemberSummaries(orgId, sprintId);
         leaderboard = await performanceService.getTeamLeaderboard(orgId, sprintId);
         atRisk      = await performanceService.getAtRiskMembers(orgId, sprintId);
       }
 
-      const [messages, jiraTasks] = await Promise.all([
+      const [messages, jiraTasks, managerialKeys] = await Promise.all([
         slackService.getChannelMessages(cfg4.channelId, start.getTime() / 1000, Date.now() / 1000),
         jiraService.getSprintIssues(cfg4.projectKey, startStr, endStr),
+        memberRoleRepository.getManagerialMemberKeys(orgId),
       ]);
 
-      const memberActivity = cfg4.teamMembers.map((m) => {
+      // This app tracks IC activity/performance only — exclude managerial members.
+      const trackedTeamMembers = cfg4.teamMembers.filter((m) => !managerialKeys.slackUserIds.has(m.id));
+      const memberActivity = trackedTeamMembers.map((m) => {
         const userMsgs = messages.filter((msg) => msg.user === m.id);
         return {
           name: m.name,

@@ -11,6 +11,7 @@ const claudeService = require('../services/claudeService');
 const zohoService  = require('../services/zohoService');
 const activityLog  = require('../services/activityLog');
 const memberRepo   = require('../repositories/memberRepository');
+const sprintRepo   = require('../repositories/sprintRepository');
 
 // ─── GET /api/config ──────────────────────────────────────────────────────────
 
@@ -52,6 +53,21 @@ router.post('/sprint', async (req, res) => {
     if (durationWeeks)  updates['sprint.duration_weeks'] = String(durationWeeks);
     await configService.setMany(updates);
     const window = getSprintWindow();
+
+    // Keep the `sprints` table (used by performance scoring, task/standup
+    // linkage) in sync with this screen — otherwise scoring silently keeps
+    // measuring whatever sprint was last active instead of these dates.
+    try {
+      const cfg   = configService.getSprintConfig();
+      const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+      const dbSprint = await sprintRepo.upsertSprint(
+        orgId, cfg.sprintName, window.startStr, window.endStr, cfg.durationWeeks
+      );
+      if (dbSprint) await sprintRepo.setActive(dbSprint.id, orgId);
+    } catch (syncErr) {
+      console.error('[POST /config/sprint] sprints table sync failed:', syncErr.message);
+    }
+
     res.json({ ok: true, message: 'Sprint config updated', window });
   } catch (err) {
     res.status(500).json({ error: err.message });

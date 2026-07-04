@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { theme, styles } from '../theme.js';
 import { API_BASE, apiHeaders } from '../config.js';
 
@@ -163,6 +163,52 @@ function Card({ children, style }) {
   );
 }
 
+// ─── Carryover from previous sprint ────────────────────────────────────────────
+
+function CarryoverPanel({ carryover, selected, onToggle }) {
+  if (!carryover || !carryover.previousSprint || carryover.tasks.length === 0) return null;
+
+  return (
+    <Card style={{ padding: '18px 20px', marginBottom: 20 }}>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: colors.gray800, fontFamily: fonts.body }}>
+          Carried over from {carryover.previousSprint.name}
+        </div>
+        <div style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body, marginTop: 2 }}>
+          {carryover.tasks.length} task{carryover.tasks.length !== 1 ? 's' : ''} still incomplete. Check the ones to include in this sprint.
+        </div>
+      </div>
+      {carryover.tasks.map((t) => (
+        <label key={t.taskId} style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 0', borderTop: `1px solid ${colors.gray100}`,
+          cursor: 'pointer',
+        }}>
+          <input
+            type="checkbox"
+            checked={selected.has(t.taskId)}
+            onChange={() => onToggle(t.taskId)}
+            style={{ flexShrink: 0, width: 15, height: 15, cursor: 'pointer' }}
+          />
+          <PriorityBadge priority={t.priority} />
+          <DomainBadge domain={t.domain} />
+          <span style={{ fontSize: 13, fontFamily: fonts.body, color: colors.gray800, flex: 1 }}>
+            {t.title}
+          </span>
+          {t.overdue && (
+            <span style={{ fontSize: 11, fontWeight: 600, color: colors.red600, fontFamily: fonts.body }}>
+              overdue
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: colors.gray400, fontFamily: fonts.body, minWidth: 90, textAlign: 'right' }}>
+            {t.assigneeName || 'unassigned'}
+          </span>
+        </label>
+      ))}
+    </Card>
+  );
+}
+
 // ─── STATE 1: Input form ──────────────────────────────────────────────────────
 
 function InputState({ onBreakdown }) {
@@ -174,6 +220,22 @@ function InputState({ onBreakdown }) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
+  const [carryover, setCarryover]             = useState(null);
+  const [selectedCarryover, setSelectedCarryover] = useState(() => new Set());
+
+  useEffect(() => {
+    api('/api/sprint-planning/carryover')
+      .then(setCarryover)
+      .catch(() => setCarryover(null));
+  }, []);
+
+  function toggleCarryover(taskId) {
+    setSelectedCarryover((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+      return next;
+    });
+  }
 
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
@@ -185,7 +247,7 @@ function InputState({ onBreakdown }) {
     try {
       const data = await api('/api/sprint-planning/breakdown', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, carryoverTaskIds: [...selectedCarryover] }),
       });
       onBreakdown(form, data);
     } catch (err) {
@@ -213,6 +275,8 @@ function InputState({ onBreakdown }) {
       <p style={{ ...styles.subtitle, marginBottom: 32 }}>
         Describe your sprint goal and Claude will break it into role-matched, workload-balanced tasks.
       </p>
+
+      <CarryoverPanel carryover={carryover} selected={selectedCarryover} onToggle={toggleCarryover} />
 
       <Card style={{ padding: 28 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 20 }}>
@@ -434,6 +498,17 @@ function TaskCard({ task, idx, workloadSnapshot, assignedMemberId, onUpdate, onA
         {task.domain && (
           <div style={{ flexShrink: 0, paddingTop: 1 }}>
             <DomainBadge domain={task.domain} />
+          </div>
+        )}
+        {task.carriedOver && (
+          <div style={{ flexShrink: 0, paddingTop: 1 }} title={`Originally ${task.originalJiraKey}, incomplete last sprint`}>
+            <span style={{
+              display: 'inline-block', fontSize: 11, fontWeight: 600, fontFamily: fonts.body,
+              padding: '2px 8px', borderRadius: 100,
+              background: colors.tintAmber.bg, color: colors.amber600, border: `1px solid ${colors.tintAmber.border}`,
+            }}>
+              ↺ carried over
+            </span>
           </div>
         )}
         {editingTitle ? (

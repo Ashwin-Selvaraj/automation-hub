@@ -109,6 +109,40 @@ async function countByStatus(sprintId, assigneeId) {
   }
 }
 
+async function getIncompleteTasksBySprint(sprintId) {
+  try {
+    const { rows } = await db.query(
+      `SELECT t.*, m.name AS assignee_name
+       FROM tasks t
+       LEFT JOIN members m ON t.assignee_id = m.id
+       WHERE t.sprint_id = $1 AND t.completed_at IS NULL
+       ORDER BY t.due_date ASC NULLS LAST`,
+      [sprintId]
+    );
+    return rows;
+  } catch (err) {
+    console.error('[taskRepository.getIncompleteTasksBySprint]', err.message);
+    throw err;
+  }
+}
+
+async function getByIds(organisationId, taskIds) {
+  if (!taskIds || taskIds.length === 0) return [];
+  try {
+    const { rows } = await db.query(
+      `SELECT t.*, m.name AS assignee_name
+       FROM tasks t
+       LEFT JOIN members m ON t.assignee_id = m.id
+       WHERE t.id = ANY($1::int[]) AND t.organisation_id = $2`,
+      [taskIds, organisationId]
+    );
+    return rows;
+  } catch (err) {
+    console.error('[taskRepository.getByIds]', err.message);
+    throw err;
+  }
+}
+
 async function getActiveTaskCountsPerMember(organisationId) {
   try {
     const { rows } = await db.query(
@@ -129,4 +163,4 @@ async function getActiveTaskCountsPerMember(organisationId) {
   }
 }
 
-module.exports = { upsertTask, findBySprintAndAssignee, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember };
+module.exports = { upsertTask, findBySprintAndAssignee, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember, getIncompleteTasksBySprint, getByIds };

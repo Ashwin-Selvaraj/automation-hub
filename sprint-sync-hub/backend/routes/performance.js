@@ -7,6 +7,7 @@ const statsRepo          = require('../repositories/statsRepository');
 const notifRepo          = require('../repositories/notificationRepository');
 const sprintRepo         = require('../repositories/sprintRepository');
 const scoringService     = require('../services/scoringService');
+const memberRoleRepository = require('../repositories/memberRoleRepository');
 
 function orgId() {
   return parseInt(process.env.ORGANISATION_ID || '1', 10);
@@ -24,6 +25,7 @@ router.get('/leaderboard', async (req, res) => {
   try {
     const sprintId = await resolveSprintId(req);
     if (!sprintId) return res.json([]);
+    await performanceService.refreshAllMemberSummaries(orgId(), sprintId);
     const leaderboard = await performanceService.getTeamLeaderboard(orgId(), sprintId);
     res.json(leaderboard);
   } catch (err) {
@@ -68,6 +70,7 @@ router.get('/team/at-risk', async (req, res) => {
   try {
     const sprintId = await resolveSprintId(req);
     if (!sprintId) return res.json([]);
+    await performanceService.refreshAllMemberSummaries(orgId(), sprintId);
     const atRisk = await performanceService.getAtRiskMembers(orgId(), sprintId);
     res.json(atRisk);
   } catch (err) {
@@ -114,12 +117,19 @@ router.get('/dashboard', async (req, res) => {
       return res.json({ teamStats: null, leaderboard: [], atRisk: [], recentActivity: [] });
     }
 
-    const [leaderboard, atRisk, recentActivity, allSummaries] = await Promise.all([
+    await performanceService.refreshAllMemberSummaries(orgId(), sprintId);
+
+    const [leaderboard, atRisk, recentActivityRaw, allSummariesRaw, managerialKeys] = await Promise.all([
       performanceService.getTeamLeaderboard(orgId(), sprintId),
       performanceService.getAtRiskMembers(orgId(), sprintId),
       notifRepo.getRecentActivity(orgId(), 20),
       statsRepo.getAllSprintSummaries(sprintId),
+      memberRoleRepository.getManagerialMemberKeys(orgId()),
     ]);
+
+    // This app tracks IC activity/performance only — exclude managerial members.
+    const recentActivity = recentActivityRaw.filter((a) => !managerialKeys.memberIds.has(a.member_id));
+    const allSummaries   = allSummariesRaw.filter((m) => !managerialKeys.memberIds.has(m.member_id));
 
     const teamStats = allSummaries.length > 0 ? {
       avgScore:       Math.round(allSummaries.reduce((s, m) => s + parseFloat(m.performance_score || 0), 0) / allSummaries.length),
