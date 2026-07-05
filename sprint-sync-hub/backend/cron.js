@@ -594,6 +594,8 @@ function startCronJobs() {
         }
       }
 
+      
+
       console.log(
         `[${new Date().toISOString()}] Checkout check complete: ` +
         `${checkedOutCount} checked out, ${missingStandupCount} missing standup, ${dmsSentCount} DMs sent`
