@@ -35,12 +35,23 @@ function relativeTime(iso) {
 // ─── Daily brief ──────────────────────────────────────────────────────────────
 
 const BRIEF_SECTIONS = [
-  { key: 'blockers',  label: 'Blocked',      tone: 'urgent' },
-  { key: 'overdue',   label: 'Overdue',      tone: 'urgent' },
-  { key: 'dueSoon',   label: 'Due soon',     tone: 'watch'  },
-  { key: 'stale',     label: 'Not moving',   tone: 'watch'  },
-  { key: 'offPlan',   label: 'Off-plan',     tone: 'watch'  },
+  { key: 'blockers',   label: 'Blocked',     tone: 'urgent' },
+  { key: 'overdue',    label: 'Overdue',     tone: 'urgent' },
+  { key: 'dueSoon',    label: 'Due soon',    tone: 'watch'  },
+  { key: 'stale',      label: 'Not moving',  tone: 'watch'  },
+  { key: 'offPlan',    label: 'Off-plan',    tone: 'watch'  },
+  { key: 'wip',        label: 'Overloaded',  tone: 'watch'  },
+  { key: 'scopeAdded', label: 'Added late',  tone: 'watch'  },
 ];
+
+// Delivery forecast states. "Too early" is deliberately styled as neutral —
+// refusing to guess is a correct answer, not a warning.
+const FORECAST_TONE = {
+  'at-risk':   { label: 'At risk',   color: 'red'    },
+  stalled:     { label: 'Stalled',   color: 'red'    },
+  'on-track':  { label: 'On track',  color: 'green'  },
+  'too-early': { label: 'Too early', color: 'muted'  },
+};
 
 function BriefCard() {
   const [brief, setBrief] = useState(null);
@@ -106,7 +117,27 @@ function BriefCard() {
             </div>
           )}
 
-          {s.progress?.total > 0 && (
+          {s.forecast && FORECAST_TONE[s.forecast.status] && (() => {
+            const tone = FORECAST_TONE[s.forecast.status];
+            const color = tone.color === 'red' ? colors.red600
+                        : tone.color === 'green' ? colors.green600
+                        : colors.gray400;
+            return (
+              <div style={{
+                marginTop: 12, paddingTop: 12,
+                borderTop: `1px solid ${colors.gray200 || '#e5e7eb'}`,
+                display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
+              }}>
+                <span style={{
+                  fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  color, fontWeight: 600,
+                }}>{tone.label}</span>
+                <span style={{ fontSize: 12, color: colors.gray400 }}>{s.forecast.summary}</span>
+              </div>
+            );
+          })()}
+
+          {!s.forecast && s.progress?.total > 0 && (
             <div style={{ fontSize: 12, color: colors.gray400, marginTop: 10 }}>
               Sprint: {s.progress.done} of {s.progress.total} done · {s.daysLeft} working days left
             </div>

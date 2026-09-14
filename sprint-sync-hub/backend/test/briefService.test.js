@@ -29,6 +29,14 @@ const FULL = {
   dueSoon: [{ key: 'QG-19', title: 'Rate limiting', assignee: 'Bob', daysUntil: 0, status: 'To Do' }],
   stale:   [{ key: 'QG-7',  title: 'Refactor auth', assignee: 'Bob', status: 'In Progress' }],
   offPlan: [{ name: 'Carol', detail: 'working on QG-31, assigned to Dave', key: 'QG-31', type: 'unassigned_task' }],
+  wip: [{ name: 'Alice', inFlight: 5, over: 2, keys: ['QG-1', 'QG-2', 'QG-3'] }],
+  wipLimit: 3,
+  scopeAdded: [{ key: 'QG-20', title: 'Hotfix: CSV export', assignee: 'Bob', addedOn: '2026-09-11', done: false }],
+  scopeAddedShare: 21,
+  forecast: {
+    status: 'at-risk',
+    summary: 'At this rate 10 tasks will not land — closing 0.5 a day, 11 open, 2 working days left.',
+  },
   noUpdate:  ['Dave'],
   unmatched: ['Erin'],
   absent: ['Frank'],
@@ -49,7 +57,8 @@ test('every signal given to the renderer appears in the output', () => {
   for (const needle of [
     'Alice', 'waiting on infra', 'Bob', 'QG-12', '3 days late',
     'QG-19', 'QG-7', 'Carol', 'QG-31', 'Dave', 'Erin',
-    '12 of 20 done', '4 working days left',
+    '5 in flight', 'Holding more than 3', 'QG-20', '2026-09-11',
+    '21% of the sprint', '10 tasks will not land',
   ]) {
     assert.ok(out.includes(needle), `expected the brief to mention "${needle}"`);
   }

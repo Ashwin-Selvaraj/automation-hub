@@ -4,6 +4,7 @@ const briefRepo   = require('../repositories/briefRepository');
 const sprintRepo  = require('../repositories/sprintRepository');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const attendanceService = require('./attendanceService');
+const deliveryRiskService = require('./deliveryRiskService');
 const claudeService = require('./claudeService');
 const { getSprintWindow } = require('../utils/dateUtils');
 
@@ -93,6 +94,16 @@ async function collect(organisationId, { date, withFocus = true } = {}) {
     console.warn('[brief] attendance lookup failed, treating everyone as present:', err.message);
   }
 
+  // Delivery risk rides along in the brief rather than becoming three more
+  // messages. A lead who gets a separate DM for the forecast, one for WIP and
+  // one for scope creep is back to being paged all morning.
+  let risk = null;
+  try {
+    risk = await deliveryRiskService.assess(organisationId);
+  } catch (err) {
+    console.warn('[brief] delivery risk assessment failed:', err.message);
+  }
+
   let blockers = [];
   const updates = standups
     .filter((s) => isTracked(s.name) && s.message_text)
@@ -126,6 +137,11 @@ async function collect(organisationId, { date, withFocus = true } = {}) {
     unmatched:  unmatched.map((s) => s.name),
     absent:     [...absentNames],
     postedCount: standups.filter((s) => isTracked(s.name)).length,
+    forecast:   risk ? risk.forecast : null,
+    wip:        risk ? risk.wip : [],
+    wipLimit:   risk ? risk.wipLimit : null,
+    scopeAdded: risk ? risk.scopeAdded : [],
+    scopeAddedShare: risk ? risk.scopeAddedShare : null,
   };
 
   if (withFocus && hasAnythingToSay(signals)) {
@@ -142,7 +158,8 @@ async function collect(organisationId, { date, withFocus = true } = {}) {
 function hasAnythingToSay(s) {
   return s.blockers.length > 0 || s.overdue.length > 0 || s.stale.length > 0 ||
          s.offPlan.length > 0 || s.noUpdate.length > 0 || s.unmatched.length > 0 ||
-         s.dueSoon.length > 0;
+         s.dueSoon.length > 0 || (s.wip || []).length > 0 ||
+         ['at-risk', 'stalled'].includes(s.forecast?.status);
 }
 
 function plural(n, one, many) {
@@ -195,6 +212,22 @@ function render(s) {
     }
   }
 
+  if ((s.wip || []).length) {
+    lines.push('', `*🧺 Holding more than ${s.wipLimit} things at once — ${s.wip.length}*`);
+    for (const p of s.wip) {
+      lines.push(`• *${p.name}* — ${p.inFlight} in flight: ${p.keys.join(', ')}`);
+    }
+  }
+
+  if ((s.scopeAdded || []).length) {
+    const share = s.scopeAddedShare != null ? ` (${s.scopeAddedShare}% of the sprint)` : '';
+    lines.push('', `*➕ Added after the sprint started — ${s.scopeAdded.length}${share}*`);
+    for (const t of s.scopeAdded.slice(0, 6)) {
+      lines.push(`• ${t.key} ${t.title} — ${t.assignee || 'unassigned'}, added ${t.addedOn}${t.done ? ' (done)' : ''}`);
+    }
+    if (s.scopeAdded.length > 6) lines.push(`_…and ${s.scopeAdded.length - 6} more_`);
+  }
+
   if (s.noUpdate.length || s.unmatched.length) {
     lines.push('', '*🔇 Quiet today*');
     if (s.noUpdate.length)  lines.push(`• No standup: ${s.noUpdate.join(', ')}`);
@@ -202,7 +235,10 @@ function render(s) {
     lines.push('_Context, not a to-do list — the bot has not messaged anyone about this._');
   }
 
-  if (s.progress && s.progress.total > 0) {
+  if (s.forecast && s.forecast.status !== 'no-data') {
+    const icon = { 'at-risk': '📉', stalled: '🛑', 'on-track': '📈', 'too-early': '📊' }[s.forecast.status] || '📊';
+    lines.push('', `*${icon} Forecast* — ${s.forecast.summary}`);
+  } else if (s.progress && s.progress.total > 0) {
     lines.push('', `*📊 Sprint* — ${s.progress.done} of ${s.progress.total} done, ${s.progress.notStarted} not started, ${plural(s.daysLeft, 'working day', 'working days')} left`);
   }
 
