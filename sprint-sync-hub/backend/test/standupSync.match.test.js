@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * Integration test for cron.js's huddle sync happy path: a Slack standup
- * message that matches the member's own assigned Jira task should get a
- * comment posted and a status transition on that issue.
+ * Integration test for the standup-sync automation's happy path: a Slack
+ * standup message that matches the member's own assigned Jira task should get
+ * a comment posted and a status transition on that issue.
  *
  * All external services (Slack, Jira, Claude, DB, repositories) are stubbed
  * via require.cache substitution — this exercises cron.js's real control
@@ -134,10 +134,13 @@ stubModule('db', {
   },
 });
 
-const { runHuddleSync } = require('../cron');
+const standupSync = require('../automations/delivery/standupSync');
+const configService = require('../services/configService');
 
-test('runHuddleSync: matches a standup message to its assigned Jira task and updates it', async () => {
-  const result = await runHuddleSync();
+const ctx = () => ({ orgId: 1, cfg: configService.getSprintConfig(), trigger: 'manual' });
+
+test('standup-sync: matches a standup message to its assigned Jira task and updates it', async () => {
+  const result = await standupSync.run(ctx());
 
   assert.equal(result.processed, 1);
   assert.equal(result.matched, 1);

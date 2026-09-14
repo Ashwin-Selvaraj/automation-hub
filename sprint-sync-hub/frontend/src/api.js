@@ -25,6 +25,14 @@ export const getOverdueIssues = () => request('/api/jira/overdue');
 export const postJiraComment = (issueKey, text) => request('/api/jira/comment', { method: 'POST', body: JSON.stringify({ issueKey, text }) });
 export const postJiraTransition = (issueKey, statusName) => request('/api/jira/transition', { method: 'POST', body: JSON.stringify({ issueKey, statusName }) });
 
+// Automations — the catalogue is built from what the backend registry declares,
+// so this list stays correct as automations are added or removed.
+export const getAutomations = () => request('/api/automations');
+export const setAutomationEnabled = (key, enabled) =>
+  request(`/api/automations/${key}`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
+export const runAutomation = (key) =>
+  request(`/api/automations/${key}/run`, { method: 'POST', body: JSON.stringify({}) });
+
 export const runSync = () => request('/api/sync/run', { method: 'POST' });
 export const getSyncLog = (limit = 50) => request(`/api/sync/log?limit=${limit}`);
 

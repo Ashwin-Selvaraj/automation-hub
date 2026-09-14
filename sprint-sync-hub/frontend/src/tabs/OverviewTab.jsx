@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { theme, styles } from '../theme.js';
-import { getSlackMessages, getJiraIssues, getSyncLog } from '../api.js';
+import { getSlackMessages, getJiraIssues, getSyncLog, getAutomations, setAutomationEnabled, runAutomation } from '../api.js';
 import { API_BASE, apiHeaders } from '../config.js';
 import Card, { SectionHeader } from '../components/Card.jsx';
 import Badge from '../components/Badge.jsx';
@@ -9,12 +9,141 @@ import Spinner from '../components/Spinner.jsx';
 
 const { colors, fonts } = theme;
 
-const AUTOMATIONS = [
-  { name: 'Huddle Sync',      desc: 'Matches Slack standup messages to Jira tasks every 30 min, Mon–Fri 8am–8pm.' },
-  { name: 'Deadline Check',   desc: 'DMs assignees of tasks due today. Runs at 9:00 am daily.' },
-  { name: 'End-of-Day Check', desc: 'DMs members with no standup update. Runs Mon–Fri at the configured EOD time.' },
-  { name: 'Weekly Report',    desc: 'Posts AI sprint summary to the Slack channel. Runs on the configured report day.' },
-];
+// Who an automation talks to. Worth surfacing: an automation that messages the
+// whole team deserves more thought before switching it on than one that only
+// writes to Jira.
+const AUDIENCE_LABEL = {
+  lead:     'Goes to you',
+  member:   'Messages the team',
+  reviewer: 'Messages reviewers',
+  channel:  'Posts to the channel',
+  system:   'No messages',
+};
+
+function relativeTime(iso) {
+  if (!iso) return null;
+  const diff = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(diff)) return null;
+  const mins = Math.round(diff / 60000);
+  if (mins < 1)    return 'just now';
+  if (mins < 60)   return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24)  return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+// ─── Automations ──────────────────────────────────────────────────────────────
+
+function AutomationRow({ automation, onToggle, onRun, busy }) {
+  const { key, name, description, schedule, scheduleError, enabled, audience, lastRun } = automation;
+  const failed = lastRun?.status === 'failed';
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 14, color: colors.gray900 }}>{name}</span>
+          <span style={{ fontSize: 11, color: colors.gray400, fontFamily: fonts.mono || fonts.body }}>
+            {AUDIENCE_LABEL[audience] || audience}
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: colors.gray400, marginTop: 2 }}>{description}</div>
+        <div style={{ fontSize: 11, color: colors.gray400, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {scheduleError
+            ? <span style={{ color: colors.red600 }}>Schedule problem: {scheduleError}</span>
+            : <span>{enabled ? schedule : 'Not scheduled'}</span>}
+          {lastRun && (
+            <span style={{ color: failed ? colors.red600 : colors.gray400 }}>
+              last run {relativeTime(lastRun.at)}{failed ? ' — failed' : ''}
+            </span>
+          )}
+        </div>
+        {failed && lastRun.error && (
+          <div style={{ fontSize: 11, color: colors.red600, marginTop: 3 }}>{lastRun.error}</div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => onRun(key)}
+          disabled={busy}
+          style={{
+            fontSize: 11, color: colors.gray400, background: 'none',
+            border: `1px solid ${colors.gray200 || '#e5e7eb'}`, borderRadius: 4,
+            padding: '3px 8px', cursor: busy ? 'default' : 'pointer',
+            fontFamily: fonts.body, opacity: busy ? 0.5 : 1,
+          }}
+        >
+          {busy ? 'Running…' : 'Run now'}
+        </button>
+        <Toggle checked={enabled} onChange={(v) => onToggle(key, v)} />
+      </div>
+    </div>
+  );
+}
+
+function AutomationsCard() {
+  const [automations, setAutomations] = useState(null);
+  const [error,   setError]   = useState(null);
+  const [busyKey, setBusyKey] = useState(null);
+
+  const load = () => getAutomations()
+    .then((d) => { setAutomations(d.automations); setError(null); })
+    .catch((e) => setError(e.message));
+
+  useEffect(() => { load(); }, []);
+
+  const toggle = async (key, enabled) => {
+    // Optimistic — the switch should feel immediate; a failure re-reads truth.
+    setAutomations((prev) => prev.map((a) => (a.key === key ? { ...a, enabled } : a)));
+    try {
+      await setAutomationEnabled(key, enabled);
+      await load();
+    } catch (e) {
+      setError(e.message);
+      await load();
+    }
+  };
+
+  const run = async (key) => {
+    setBusyKey(key);
+    try {
+      await runAutomation(key);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyKey(null);
+      await load();
+    }
+  };
+
+  return (
+    <Card style={{ marginBottom: 0 }}>
+      <SectionHeader>Automations</SectionHeader>
+      {error && (
+        <div style={{ fontSize: 12, color: colors.red600, marginBottom: 10 }}>{error}</div>
+      )}
+      {automations === null && !error && <Spinner />}
+      {automations?.length === 0 && (
+        <div style={{ fontSize: 13, color: colors.gray400 }}>No automations are registered.</div>
+      )}
+      <div>
+        {(automations || []).map((a, i) => (
+          <React.Fragment key={a.key}>
+            {i > 0 && <div style={styles.divider} />}
+            <AutomationRow
+              automation={a}
+              onToggle={toggle}
+              onRun={run}
+              busy={busyKey === a.key}
+            />
+          </React.Fragment>
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 // ─── Member list popup ────────────────────────────────────────────────────────
 
@@ -332,7 +461,6 @@ export default function OverviewTab({ config, navigate }) {
   const [issues,      setIssues]      = useState([]);
   const [log,         setLog]         = useState([]);
   const [loading,     setLoading]     = useState(true);
-  const [enabled,     setEnabled]     = useState([true, true, true, true]);
   const [perfDash,    setPerfDash]    = useState(null);
   const [popup,        setPopup]        = useState(null); // 'posted' | 'missing' | 'tasks' | 'present' | 'leave' | 'late' | null
   const [attendance,     setAttendance]     = useState(null); // Zoho data
@@ -649,23 +777,7 @@ export default function OverviewTab({ config, navigate }) {
       </Card>
 
       {/* Automations */}
-      <Card style={{ marginBottom: 0 }}>
-        <SectionHeader>Automations</SectionHeader>
-        <div>
-          {AUTOMATIONS.map((a, i) => (
-            <React.Fragment key={a.name}>
-              {i > 0 && <div style={styles.divider} />}
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-                <div>
-                  <div style={{ fontSize: 14, color: colors.gray900, fontWeight: 400 }}>{a.name}</div>
-                  <div style={{ fontSize: 12, color: colors.gray400, marginTop: 2 }}>{a.desc}</div>
-                </div>
-                <Toggle checked={enabled[i]} onChange={(v) => setEnabled((p) => p.map((x, j) => j === i ? v : x))} />
-              </div>
-            </React.Fragment>
-          ))}
-        </div>
-      </Card>
+      <AutomationsCard />
 
       {/* Popups */}
       {popup === 'posted' && (

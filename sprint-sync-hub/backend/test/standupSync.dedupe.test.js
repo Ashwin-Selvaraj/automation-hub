@@ -1,16 +1,13 @@
 'use strict';
 
 /**
- * Guards the fix for the duplicate-DM class of bug.
+ * The standup-sync automation must never send a person-facing DM without
+ * handing the notifier a dedupe key, and must respect the notifier's answer.
  *
  * Deduplication used to live in a 500-entry in-memory array, so a restart — or
- * simply a busy channel evicting the record — let the huddle sync re-send a
- * no-match DM to someone who had already received one. It now claims a durable
- * key before sending, and these tests pin that behaviour:
- *
- *   - claim granted  → the DM goes out exactly once
- *   - claim refused  → nothing is sent
- *   - send throws    → the claim is released so a later run can retry
+ * simply a busy channel evicting the record — let the sync re-send a no-match
+ * DM to someone who had already received one. Sending now goes through
+ * core/notifier, which refuses any send that arrives without a key.
  */
 
 const test   = require('node:test');
@@ -19,26 +16,20 @@ const { stubModule } = require('./helpers/mockRequire');
 
 process.env.ORGANISATION_ID = '1';
 
-const calls = { dms: [], claims: [], releases: [] };
-let claimResult = true;
-let sendShouldThrow = false;
+const calls = { sends: [], claims: [] };
+let notifierResult = { sent: true };
 
 function reset() {
-  calls.dms = [];
+  calls.sends = [];
   calls.claims = [];
-  calls.releases = [];
-  claimResult = true;
-  sendShouldThrow = false;
+  notifierResult = { sent: true };
 }
 
 stubModule('services/slackService', {
   getChannelMessages: async () => [
-    { text: 'Spent the day on some research, nothing on the board yet', user: 'U1', ts: '1700000000.000100' },
+    { text: 'Spent the day on research, nothing on the board yet', user: 'U1', ts: '1700000000.000100' },
   ],
-  sendDM: async (userId, text) => {
-    if (sendShouldThrow) throw new Error('slack is down');
-    calls.dms.push({ userId, text });
-  },
+  sendDM: async () => { throw new Error('standup-sync must not call slackService directly'); },
   postToChannel: async () => {},
 });
 
@@ -51,12 +42,16 @@ stubModule('services/jiraService', {
 
 stubModule('services/claudeService', {
   parseMultiDateStandup: async () => null,
-  // No Jira task matches this update at all — the no-match branch.
   matchHuddleToJira: async () => ({
     matched: false, confidence: 10, issueKey: null, matchType: 'no_match',
     reason: 'nothing on the board resembles this', suggestedStatus: null, commentText: null,
   }),
   draftNoMatchDM: async () => 'please update Jira',
+});
+
+stubModule('core/notifier', {
+  sendDM: async (opts) => { calls.sends.push(opts); return notifierResult; },
+  postToChannel: async () => ({ sent: true }),
 });
 
 stubModule('core/auditLog', {
@@ -66,11 +61,8 @@ stubModule('core/auditLog', {
 });
 
 stubModule('core/idempotency', {
-  claim: async (orgId, key) => {
-    calls.claims.push(key);
-    return claimResult;
-  },
-  release: async (orgId, key) => { calls.releases.push(key); },
+  claim: async (orgId, key) => { calls.claims.push(key); return true; },
+  release: async () => {},
 });
 
 stubModule('core/cursor', {
@@ -90,13 +82,6 @@ stubModule('repositories/sprintRepository', { getActiveSprint: async () => ({ id
 stubModule('repositories/memberRepository', { findOrCreate: async () => ({ id: 1, name: 'Alice' }), findAll: async () => [] });
 stubModule('repositories/taskRepository', { findBySprintAndAssignee: async () => [], findByJiraKey: async () => null });
 stubModule('repositories/notificationRepository', { recordNotification: async () => {}, wasNotifiedRecently: async () => false });
-stubModule('services/configService', {
-  getSprintConfig: () => ({
-    channelId: 'C1', projectKey: 'QG', sprintName: 'Sprint 1',
-    teamMembers: [{ id: 'U1', name: 'Alice' }],
-    timezone: 'Asia/Kolkata',
-  }),
-});
 stubModule('db', {
   query: async (sql) => {
     if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ acquired: true }] };
@@ -104,38 +89,42 @@ stubModule('db', {
   },
 });
 
-const { runHuddleSync } = require('../cron');
+const standupSync = require('../automations/delivery/standupSync');
 
-test('no-match DM is sent when the dedupe claim is granted', async () => {
+const CFG = {
+  channelId: 'C1', projectKey: 'QG', sprintName: 'Sprint 1',
+  teamMembers: [{ id: 'U1', name: 'Alice' }],
+  timezone: 'Asia/Kolkata',
+};
+const ctx = () => ({ orgId: 1, cfg: CFG, trigger: 'manual' });
+
+test('a no-match DM is always sent with a dated, per-person dedupe key', async () => {
   reset();
-  await runHuddleSync();
+  await standupSync.run(ctx());
 
-  assert.equal(calls.dms.length, 1, 'expected exactly one DM');
-  assert.equal(calls.dms[0].userId, 'U1');
-  assert.ok(
-    calls.claims.some((k) => k.startsWith('no-match-dm:U1:')),
-    'expected a dated per-member claim key'
-  );
+  assert.equal(calls.sends.length, 1, 'expected exactly one DM attempt');
+  const send = calls.sends[0];
+  assert.equal(send.slackUserId, 'U1');
+  assert.match(send.dedupeKey, /^no-match-dm:U1:\d{4}-\d{2}-\d{2}$/);
+  assert.equal(send.type, 'no_match_dm');
 });
 
-test('no DM is sent when the claim is already held — a restart cannot re-send', async () => {
+test('the sync keeps running when the notifier reports the DM was already sent', async () => {
   reset();
-  claimResult = false;
+  notifierResult = { sent: false, reason: 'already sent' };
 
-  await runHuddleSync();
+  const result = await standupSync.run(ctx());
 
-  assert.equal(calls.dms.length, 0, 'a held claim must suppress the DM entirely');
+  assert.equal(result.noMatch, 1, 'the message is still counted');
+  assert.equal(result.errors, 0, 'a suppressed DM is not an error');
 });
 
-test('a failed send releases the claim so a later run can retry', async () => {
+test('the lead alert is claimed once per person per day, separately from the DM', async () => {
   reset();
-  sendShouldThrow = true;
+  await standupSync.run(ctx());
 
-  await runHuddleSync();
-
-  assert.equal(calls.dms.length, 0);
   assert.ok(
-    calls.releases.some((k) => k.startsWith('no-match-dm:U1:')),
-    'claim must be released when the DM never actually went out'
+    calls.claims.some((k) => /^no-match-lead:U1:\d{4}-\d{2}-\d{2}$/.test(k)),
+    'expected a dated lead-alert claim so the lead is not re-alerted on every run'
   );
 });
