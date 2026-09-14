@@ -8,11 +8,12 @@
 
 const claudeService        = require('./claudeService');
 const slackService         = require('./slackService');
-const activityLog          = require('./activityLog');
 const notifRepo            = require('../repositories/notificationRepository');
 const taskRepo             = require('../repositories/taskRepository');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const db                   = require('../db');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 /**
  * Central handler for task mismatches.
@@ -149,7 +150,7 @@ async function handleMismatch(organisationId, sprintId, member, messageText, mat
   }
 
   // ── STEP 7: Activity log ──────────────────────────────────────────────────
-  activityLog.addEntry({
+  auditLog.record(getOrgId(), {
     type:     'task_mismatch',
     userId:   String(slackUserId),
     userName: member.name,

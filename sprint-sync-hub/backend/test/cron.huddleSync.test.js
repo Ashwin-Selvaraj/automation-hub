@@ -50,11 +50,26 @@ stubModule('services/claudeService', {
   generateWeeklyReport: async () => '',
 });
 
-stubModule('services/activityLog', {
-  addEntry:         () => {},
-  getEntries:       () => [],
-  recentDMExists:   () => false,
-  getEntriesForUser: () => [],
+stubModule('core/auditLog', {
+  record:                 () => Promise.resolve(),
+  list:                   async () => [],
+  listForUser:            async () => [],
+  userIdsWithEntrySince:  async () => new Set(),
+  purgeOlderThan:         async () => 0,
+});
+
+stubModule('core/idempotency', {
+  claim:        async () => true,
+  release:      async () => {},
+  isClaimed:    async () => false,
+  purgeExpired: async () => 0,
+});
+
+stubModule('core/cursor', {
+  get:       async () => null,
+  set:       async () => {},
+  getNumber: async (_org, _key, fallback) => fallback,
+  clear:     async () => {},
 });
 
 stubModule('services/performanceService', {
@@ -80,10 +95,8 @@ stubModule('repositories/sprintRepository', {
   setActive:       async () => {},
 });
 stubModule('repositories/memberRepository', {
-  findOrCreate:  async (orgId, slackId, name) => ({ id: 1, name }),
-  findAll:       async () => [],
-  findBySlackId: async () => null,
-  findByEmail:   async () => null,
+  findOrCreate: async (orgId, slackId, name) => ({ id: 1, name }),
+  findAll:      async () => [],
 });
 stubModule('services/configService', {
   getSprintConfig: () => ({
@@ -110,9 +123,15 @@ stubModule('services/mismatchService', {
 });
 stubModule('repositories/taskRepository', {
   findBySprintAndAssignee: async () => [{ jira_key: 'QG-1', title: 'Build login page', status: 'To Do' }],
+  findByJiraKey:           async () => ({ id: 99, jira_key: 'QG-1' }),
 });
 stubModule('db', {
-  query: async () => ({ rows: [{ id: 99 }] }),
+  query: async (sql) => {
+    // The sync takes a Postgres advisory lock so a manual run and the cron
+    // can't process the same messages at once.
+    if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ acquired: true }] };
+    return { rows: [{ id: 99 }] };
+  },
 });
 
 const { runHuddleSync } = require('../cron');

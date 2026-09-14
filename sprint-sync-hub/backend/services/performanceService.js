@@ -12,8 +12,9 @@ const scoringService       = require('./scoringService');
 const slackService         = require('./slackService');
 const jiraService          = require('./jiraService');
 const claudeService        = require('./claudeService');
-const activityLog          = require('./activityLog');
-const { getSprintConfig }  = require('../utils/sprintConfig');
+const { getSprintConfig }  = require('../services/configService');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 /**
  * Check if a member should receive automated task/standup DMs.
@@ -598,7 +599,7 @@ async function recordCheckoutWithoutStandup(organisationId, sprintId, memberId, 
         dmSent = true;
       } catch (dmErr) {
         console.error('[performanceService.recordCheckoutWithoutStandup] DM failed:', dmErr.message);
-        activityLog.addEntry({
+        auditLog.record(getOrgId(), {
           type: 'checkout_no_standup', userId: slackUserId, userName: memberName,
           action: `Checkout DM failed — ${dmErr.message}`, success: false,
         });
@@ -610,7 +611,7 @@ async function recordCheckoutWithoutStandup(organisationId, sprintId, memberId, 
     await notifRepo.recordNotification(organisationId, memberId, 'missing_standup', 'dm', null);
 
     // STEP 7 — Activity log
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'checkout_no_standup',
       userId:   slackUserId || String(memberId),
       userName: memberName,
@@ -623,7 +624,7 @@ async function recordCheckoutWithoutStandup(organisationId, sprintId, memberId, 
 
   } catch (err) {
     console.error('[performanceService.recordCheckoutWithoutStandup]', err.message);
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'checkout_no_standup', userName: String(memberId),
       action: `recordCheckoutWithoutStandup failed: ${err.message}`, success: false,
     });

@@ -24,6 +24,7 @@
 const axios = require('axios');
 const fs    = require('fs');
 const path  = require('path');
+const { getOrgId } = require('../core/orgContext');
 
 // File used to persist the token across server restarts — avoids hitting
 // the token endpoint on every cold start and triggering Zoho rate limits.
@@ -147,8 +148,7 @@ async function getAccessToken() {
 
       saveTokenToDisk(_token, _tokenExpiry);
       zohoLog('INFO', 'Token refreshed and cached', {
-        expiresIn:   response.data.expires_in,
-        tokenPrefix: _token.substring(0, 15),
+        expiresIn: response.data.expires_in,
       });
 
       return _token;
@@ -293,7 +293,7 @@ async function getAllTodayAttendance(organisationId) {
   }
 
   const { query } = require('../db');
-  const orgId     = organisationId || parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const orgId     = organisationId || getOrgId();
 
   // Load DB members
   let dbMembers = [];

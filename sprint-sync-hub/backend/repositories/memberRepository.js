@@ -20,19 +20,6 @@ async function findOrCreate(organisationId, slackUserId, name, email) {
   }
 }
 
-async function findBySlackId(organisationId, slackUserId) {
-  try {
-    const { rows } = await db.query(
-      'SELECT * FROM members WHERE organisation_id = $1 AND slack_user_id = $2',
-      [organisationId, slackUserId]
-    );
-    return rows[0] || null;
-  } catch (err) {
-    console.error('[memberRepository.findBySlackId]', err.message);
-    throw err;
-  }
-}
-
 async function findAll(organisationId) {
   try {
     const { rows } = await db.query(
@@ -52,19 +39,6 @@ async function findById(memberId) {
     return rows[0] || null;
   } catch (err) {
     console.error('[memberRepository.findById]', err.message);
-    throw err;
-  }
-}
-
-async function findByEmail(organisationId, email) {
-  try {
-    const { rows } = await db.query(
-      'SELECT * FROM members WHERE organisation_id = $1 AND email = $2 LIMIT 1',
-      [organisationId, email]
-    );
-    return rows[0] || null;
-  } catch (err) {
-    console.error('[memberRepository.findByEmail]', err.message);
     throw err;
   }
 }
@@ -116,32 +90,11 @@ async function setManualJiraAccountId(memberId, jiraAccountId) {
   return updateJiraAccountId(memberId, jiraAccountId, 'manual');
 }
 
-async function deactivate(memberId) {
-  try {
-    const { rows } = await db.query(
-      'UPDATE members SET is_active = false WHERE id = $1 RETURNING *',
-      [memberId]
-    );
-    return rows[0] || null;
-  } catch (err) {
-    console.error('[memberRepository.deactivate]', err.message);
-    throw err;
-  } 
-}
-
-
-
-
-
-
 module.exports = {
   findOrCreate,
   findById,
-  findByEmail,
-  findBySlackId,
   findAll,
   updateEmail,
   updateJiraAccountId,
   setManualJiraAccountId,
-  deactivate,
 };

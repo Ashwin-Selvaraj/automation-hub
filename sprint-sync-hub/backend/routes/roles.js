@@ -5,16 +5,15 @@ const router               = express.Router();
 const roleRepository       = require('../repositories/roleRepository');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const memberRepository     = require('../repositories/memberRepository');
-const activityLog          = require('../services/activityLog');
-
-const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 // ─── GET /api/roles ───────────────────────────────────────────────────────────
 
 router.get('/', async (req, res) => {
   try {
     const { type } = req.query;
-    let roles = await roleRepository.findAll(ORG_ID());
+    let roles = await roleRepository.findAll(getOrgId());
     if (type === 'technical' || type === 'managerial') {
       roles = roles.filter((r) => r.role_type === type);
     }
@@ -31,10 +30,10 @@ router.post('/', async (req, res) => {
     const { name, role_type, receives_task_dms, can_be_assigned_tasks, skill_keywords, colour } = req.body;
     if (!name) return res.status(400).json({ error: 'name is required' });
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-    const role = await roleRepository.create(ORG_ID(), {
+    const role = await roleRepository.create(getOrgId(), {
       name, slug, role_type, receives_task_dms, can_be_assigned_tasks, skill_keywords, colour,
     });
-    activityLog.addEntry({ type: 'role_created', action: `Role created: ${name}`, success: true });
+    auditLog.record(getOrgId(), { type: 'role_created', action: `Role created: ${name}`, success: true });
     res.status(201).json(role);
   } catch (err) {
     if (err.message.includes('unique') || err.message.includes('duplicate')) {
@@ -53,7 +52,7 @@ router.patch('/:roleId', async (req, res) => {
     if (!role) return res.status(404).json({ error: 'Role not found' });
 
     const updated = await roleRepository.update(roleId, req.body);
-    activityLog.addEntry({ type: 'role_updated', action: `Role updated: ${role.name}`, success: true });
+    auditLog.record(getOrgId(), { type: 'role_updated', action: `Role updated: ${role.name}`, success: true });
     res.json(updated);
   } catch (err) {
     if (err.message.startsWith('Cannot change')) return res.status(403).json({ error: err.message });
@@ -67,7 +66,7 @@ router.delete('/:roleId', async (req, res) => {
   try {
     const { roleId } = req.params;
     const deactivated = await roleRepository.deactivate(roleId);
-    activityLog.addEntry({ type: 'role_deactivated', action: `Role deactivated: ${deactivated.name}`, success: true });
+    auditLog.record(getOrgId(), { type: 'role_deactivated', action: `Role deactivated: ${deactivated.name}`, success: true });
     res.json({ ok: true, role: deactivated });
   } catch (err) {
     if (err.message.startsWith('Cannot deactivate')) return res.status(400).json({ error: err.message });
@@ -82,7 +81,7 @@ router.get('/:roleId/members', async (req, res) => {
   try {
     const role = await roleRepository.findById(req.params.roleId);
     if (!role) return res.status(404).json({ error: 'Role not found' });
-    const members = await memberRoleRepository.getMembersWithRole(ORG_ID(), role.slug);
+    const members = await memberRoleRepository.getMembersWithRole(getOrgId(), role.slug);
     res.json({ role, members });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -134,7 +133,7 @@ router.put('/members/:memberId/roles', async (req, res) => {
       warning = `${member.name} now has only managerial roles and will no longer receive automated DMs.`;
     }
 
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type:     'roles_updated',
       userName: member.name,
       action:   `Roles updated: +${result.added.length} added, -${result.removed.length} removed`,
@@ -166,7 +165,7 @@ router.post('/members/:memberId/roles/:roleId', async (req, res) => {
 
     const assignment = await memberRoleRepository.assignRole(memberId, roleId, assignedBy || null);
 
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type:     'role_assigned',
       userName: member.name,
       action:   `Role assigned: ${role.name} → ${member.name}`,
@@ -200,7 +199,7 @@ router.delete('/members/:memberId/roles/:roleId', async (req, res) => {
       warning = `${member.name} now has only managerial roles and will no longer receive automated DMs.`;
     }
 
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type:     'role_removed',
       userName: member.name,
       action:   `Role removed: ${role.name} from ${member.name}`,

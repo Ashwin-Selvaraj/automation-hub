@@ -8,9 +8,10 @@ const notifRepo          = require('../repositories/notificationRepository');
 const sprintRepo         = require('../repositories/sprintRepository');
 const scoringService     = require('../services/scoringService');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
+const { getOrgId } = require('../core/orgContext');
 
 function orgId() {
-  return parseInt(process.env.ORGANISATION_ID || '1', 10);
+  return getOrgId();
 }
 
 async function resolveSprintId(req) {

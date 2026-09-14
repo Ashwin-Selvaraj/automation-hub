@@ -161,7 +161,6 @@ router.post('/exchange', async (req, res) => {
     res.json({
       success:       true,
       message:       'New Zoho refresh token saved. Restart the server to apply.',
-      tokenPrefix:   newRefreshToken.substring(0, 15) + '...',
       expiresIn,
       scopesGranted: SCOPES,
     });

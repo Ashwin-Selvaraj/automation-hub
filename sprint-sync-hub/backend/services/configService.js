@@ -30,6 +30,9 @@ const CONFIG_DEFS = {
   'schedule.timezone':         { category: 'schedule', label: 'Timezone',                isSecret: false, envVar: 'TIMEZONE',          default: 'Asia/Kolkata' },
   'schedule.sync_time':        { category: 'schedule', label: 'Daily Sync Time (HH:MM)', isSecret: false, envVar: 'SYNC_TIME',         default: '10:00' },
   'schedule.eod_time':         { category: 'schedule', label: 'EOD Reminder Time (HH:MM)', isSecret: false, envVar: 'EOD_CHECK_TIME',  default: '18:30' },
+  'schedule.deadline_time':    { category: 'schedule', label: 'Deadline Check Time (HH:MM)', isSecret: false, envVar: 'DEADLINE_CHECK_TIME', default: '09:00' },
+  'schedule.checkout_hours':   { category: 'schedule', label: 'Checkout Watch Hours (e.g. 16-19)', isSecret: false, envVar: 'CHECKOUT_WATCH_HOURS', default: '16-19' },
+  'schedule.workdays':         { category: 'schedule', label: 'Working Days (cron day-of-week)', isSecret: false, envVar: 'WORKDAYS', default: '1-5' },
   'schedule.report_day':       { category: 'schedule', label: 'Weekly Report Day',       isSecret: false, envVar: 'REPORT_DAY',        default: 'Friday' },
   'schedule.report_time':      { category: 'schedule', label: 'Weekly Report Time',      isSecret: false, envVar: 'REPORT_TIME',       default: '17:00' },
   'schedule.manager_slack_id': { category: 'schedule', label: 'Manager Slack ID',        isSecret: false, envVar: 'MANAGER_SLACK_ID',  default: '' },
@@ -76,18 +79,9 @@ function envValue(key) {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Get a single config value (decrypted).
- * Falls back to env/default if not in DB cache.
- */
-async function get(key) {
-  await ensureLoaded();
-  if (cache[key] !== undefined) return cache[key];
-  return envValue(key) ?? null;
-}
-
-/**
- * Get a single config value synchronously from cache only.
- * Use this after init() has been called during boot.
+ * Get a single config value synchronously from the cache, falling back to the
+ * environment variable or the declared default. Safe to call after boot, where
+ * seedFromEnv() has populated the cache.
  */
 function getSync(key) {
   if (cache && cache[key] !== undefined) return cache[key];
@@ -164,6 +158,9 @@ function getSprintConfig() {
     timezone:       getSync('schedule.timezone')     || 'Asia/Kolkata',
     syncTime:       getSync('schedule.sync_time')    || '10:00',
     eodCheckTime:   getSync('schedule.eod_time')     || '18:30',
+    deadlineTime:   getSync('schedule.deadline_time')  || '09:00',
+    checkoutHours:  getSync('schedule.checkout_hours') || '16-19',
+    workdays:       getSync('schedule.workdays')       || '1-5',
     reportDay:      getSync('schedule.report_day')   || 'Friday',
     reportTime:     getSync('schedule.report_time')  || '17:00',
     managerSlackId: getSync('schedule.manager_slack_id') || '',
@@ -212,23 +209,11 @@ function _propagateToEnv() {
   }
 }
 
-/** Invalidate cache (useful after external DB changes). */
-function invalidate() { cache = null; }
-
-/** For boot sequence — ensures cache is loaded before first request. */
-async function init() {
-  cache = await loadFromDB();
-  _propagateToEnv();
-}
-
 module.exports = {
   CONFIG_DEFS,
-  get,
   getSync,
   set,
   setMany,
   getSprintConfig,
   seedFromEnv,
-  init,
-  invalidate,
 };

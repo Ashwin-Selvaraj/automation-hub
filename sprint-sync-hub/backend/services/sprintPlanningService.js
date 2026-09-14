@@ -3,7 +3,6 @@
 const Anthropic             = require('@anthropic-ai/sdk');
 const jiraService           = require('./jiraService');
 const slackService          = require('./slackService');
-const activityLog           = require('./activityLog');
 const configService         = require('./configService');
 const skillExtraction       = require('./skillExtractionService');
 const sprintRepo            = require('../repositories/sprintRepository');
@@ -11,6 +10,8 @@ const memberRepo            = require('../repositories/memberRepository');
 const taskRepo              = require('../repositories/taskRepository');
 const statsRepo             = require('../repositories/statsRepository');
 const memberRoleRepository  = require('../repositories/memberRoleRepository');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 const MODEL = 'claude-opus-4-8';
 
@@ -301,7 +302,7 @@ async function enrichTasksWithAssignments(tasks, members, currentTaskCounts, per
  * caller passes matching IDs back into breakdownSprintGoal via carryoverTaskIds.
  */
 async function getCarryoverCandidates(organisationId) {
-  const orgId = organisationId || parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const orgId = organisationId || getOrgId();
   const previousSprint = await sprintRepo.getMostRecent(orgId);
   if (!previousSprint) return { previousSprint: null, tasks: [] };
 
@@ -356,7 +357,7 @@ function buildCarryoverTask(row, membersById, newSprintStartDate) {
 // ─── Main breakdown function ──────────────────────────────────────────────────
 
 async function breakdownSprintGoal(goalText, sprintName, startDate, endDate, organisationId, projectId, carryoverTaskIds) {
-  const orgId      = organisationId || parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const orgId      = organisationId || getOrgId();
   const workingDays = countWorkingDays(startDate, endDate);
   const client     = getAnthropicClient();
 
@@ -606,7 +607,7 @@ function validateAssignmentPlan(tasks, assignmentMap, members) {
 
 async function createSprintFromPlan(sprintData, tasks, assignmentMap) {
   const cfg        = configService.getSprintConfig();
-  const orgId      = parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const orgId      = getOrgId();
   const projectKey = cfg.projectKey;
   const channelId  = cfg.channelId;
   const { name, startDate, endDate, goalText } = sprintData;
@@ -772,7 +773,7 @@ async function createSprintFromPlan(sprintData, tasks, assignmentMap) {
   // ── Activity log ──────────────────────────────────────────────────────────
   const tasksCreated = jiraResults.filter((r) => r.success).length;
   const tasksFailed  = jiraResults.filter((r) => !r.success).length;
-  activityLog.addEntry({
+  auditLog.record(getOrgId(), {
     type:    'sprint_created',
     action:  `Sprint ${name} created with ${tasksCreated} tasks`,
     success: true,

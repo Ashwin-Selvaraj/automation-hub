@@ -32,8 +32,8 @@ stubModule('services/slackService', {
     else calls.leadAlerts.push(userId);
   },
 });
-stubModule('services/activityLog', {
-  addEntry: () => {},
+stubModule('core/auditLog', {
+  record: () => Promise.resolve(),
 });
 stubModule('db', {
   query: async () => { calls.recorded++; return { rows: [] }; },

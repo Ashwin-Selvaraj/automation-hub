@@ -4,8 +4,9 @@ const express = require('express');
 const router = express.Router();
 const jiraService = require('../services/jiraService');
 const { getSprintWindow } = require('../utils/dateUtils');
-const { getSprintConfig } = require('../utils/sprintConfig');
-const activityLog = require('../services/activityLog');
+const { getSprintConfig } = require('../services/configService');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 /**
  * GET /api/jira/issues
@@ -50,7 +51,7 @@ router.post('/comment', async (req, res) => {
       return res.status(400).json({ error: 'issueKey and text are required' });
     }
     await jiraService.addComment(issueKey, text);
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'jira_comment',
       jiraKey: issueKey,
       action: 'Comment added via dashboard',
@@ -76,7 +77,7 @@ router.post('/transition', async (req, res) => {
       return res.status(400).json({ error: 'issueKey and statusName are required' });
     }
     await jiraService.transitionIssue(issueKey, statusName);
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'jira_transition',
       jiraKey: issueKey,
       action: `Transitioned to "${statusName}" via dashboard`,

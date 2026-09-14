@@ -8,8 +8,7 @@ const memberRepo            = require('../repositories/memberRepository');
 const taskRepo              = require('../repositories/taskRepository');
 const statsRepo             = require('../repositories/statsRepository');
 const sprintRepo            = require('../repositories/sprintRepository');
-
-const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
+const { getOrgId } = require('../core/orgContext');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +69,7 @@ function buildAssignmentSummary(tasks) {
 
 router.get('/carryover', async (req, res) => {
   try {
-    const result = await sprintPlanningService.getCarryoverCandidates(ORG_ID());
+    const result = await sprintPlanningService.getCarryoverCandidates(getOrgId());
     return res.json(result);
   } catch (err) {
     console.error('[GET /sprint-planning/carryover]', err.message);
@@ -89,7 +88,7 @@ router.post('/breakdown', async (req, res) => {
     });
   }
 
-  const orgId = ORG_ID();
+  const orgId = getOrgId();
 
   try {
     const tasks = await sprintPlanningService.breakdownSprintGoal(
@@ -176,7 +175,7 @@ router.post('/create', async (req, res) => {
 
 router.get('/capacity', async (req, res) => {
   try {
-    const orgId        = ORG_ID();
+    const orgId        = getOrgId();
     const members      = await memberRepo.findAll(orgId);
     const activeSprint = await sprintRepo.getActiveSprint(orgId);
 

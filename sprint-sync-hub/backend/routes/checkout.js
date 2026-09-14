@@ -20,11 +20,8 @@ const standupRepo        = require('../repositories/standupRepository');
 const notifRepo          = require('../repositories/notificationRepository');
 const sprintRepo         = require('../repositories/sprintRepository');
 const statsRepo          = require('../repositories/statsRepository');
-const activityLog        = require('../services/activityLog');
-
-function getOrgId() {
-  return parseInt(process.env.ORGANISATION_ID || '1', 10);
-}
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 function toDateStr(d) {
   if (!d) return new Date().toISOString().split('T')[0];
@@ -59,7 +56,7 @@ router.post('/nudge/:memberId', async (req, res) => {
       if (att?.checkOutTime) checkoutTime = att.checkOutTime;
     } catch (_) { /* non-fatal — fall back to now */ }
 
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'manual_nudge', userId: member.slack_user_id, userName: member.name,
       action: `Manual nudge triggered — reason: ${reason}`, success: true,
     });

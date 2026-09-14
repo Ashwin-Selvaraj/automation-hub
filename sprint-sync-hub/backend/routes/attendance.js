@@ -12,8 +12,7 @@ const router            = express.Router();
 const attendanceService = require('../services/attendanceService');
 const zohoService       = require('../services/zohoService');
 const featureFlags      = require('../services/featureFlags');
-
-const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
+const { getOrgId } = require('../core/orgContext');
 
 const DISABLED_RESPONSE = {
   configured: false,
@@ -34,7 +33,7 @@ router.get('/today', async (req, res) => {
     const enabled = await featureFlags.isZohoAttendanceEnabled();
     if (!enabled) return res.json({ ...DISABLED_RESPONSE, date: new Date().toISOString().split('T')[0] });
 
-    const data = await attendanceService.getTodayAttendance(ORG_ID());
+    const data = await attendanceService.getTodayAttendance(getOrgId());
     res.json(data);
   } catch (err) {
     console.error('[Attendance] /today failed:', err.message);
@@ -78,7 +77,7 @@ router.get('/zoho/presence', async (req, res) => {
 
 router.get('/source', async (req, res) => {
   try {
-    const data = await attendanceService.getTodayAttendance(ORG_ID());
+    const data = await attendanceService.getTodayAttendance(getOrgId());
     res.json({
       primarySource: data.source,
       sourceDetails: data.sourceDetails,
@@ -102,7 +101,7 @@ router.get('/history', async (req, res) => {
     if (!enabled) return res.json({ enabled: false, message: 'Zoho attendance is disabled.', data: [] });
 
     const days = Math.min(parseInt(req.query.days || '7', 10), 90);
-    const data = await attendanceService.getTeamAttendanceHistory(ORG_ID(), days);
+    const data = await attendanceService.getTeamAttendanceHistory(getOrgId(), days);
     res.json({ days, records: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -127,7 +126,7 @@ router.get('/member/:memberId', async (req, res) => {
 
 router.get('/late-today', async (req, res) => {
   try {
-    const data = await attendanceService.getTodayAttendance(ORG_ID());
+    const data = await attendanceService.getTodayAttendance(getOrgId());
     res.json({ configured: true, date: data.date, late: data.late, total: data.late.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
