@@ -485,55 +485,106 @@ Only use confirmed dates from the message. Do not invent dates. Respond with JSO
   }
 }
 
+const BLOCKER_SYSTEM_PROMPT = `You read a team's standup updates and identify who is blocked.
+
+A blocker is something stopping or slowing work that the person cannot resolve alone: waiting on another person, team, review, access, credential, decision, environment, or an external dependency. Being busy, having lots to do, or working on something hard is NOT a blocker.
+
+Be conservative. A lead acting on a false blocker wastes a conversation; missing a real one costs days. When an update is ambiguous, leave it out.
+
+Respond ONLY with valid JSON matching this schema. No preamble.
+{"blockers":[{"name":"<member name exactly as given>","summary":"<one short clause, max 12 words>","waitingOn":"<person, team, or thing they are waiting for, or null>"}]}
+
+Return {"blockers":[]} when nobody is blocked.`;
+
+/**
+ * Extracts blockers from a day's standup updates.
+ *
+ * This is the one part of the daily brief that needs judgement rather than a
+ * query — blockers are stated in prose, inconsistently, and often hedged.
+ *
+ * @param {Array<{ name: string, text: string }>} updates
+ * @returns {Promise<Array<{ name: string, summary: string, waitingOn: string|null }>>}
+ */
+async function extractBlockers(updates) {
+  if (!updates || updates.length === 0) return [];
+
+  const rendered = updates
+    .map((u) => `${u.name}: ${String(u.text || '').replace(/\s+/g, ' ').slice(0, 600)}`)
+    .join('\n\n');
+
+  const response = await getClient().messages.create({
+    model: MODEL,
+    max_tokens: 2000,
+    thinking: { type: 'adaptive' },
+    system: BLOCKER_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: `Today's standup updates:\n\n${rendered}` }],
+  });
+
+  const text = response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('');
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return [];
+
+  try {
+    const parsed = JSON.parse(match[0]);
+    if (!Array.isArray(parsed.blockers)) return [];
+    // Only keep blockers attributed to someone who actually posted, so a
+    // hallucinated name can never reach the brief.
+    const known = new Set(updates.map((u) => u.name));
+    return parsed.blockers
+      .filter((b) => b && typeof b.name === 'string' && known.has(b.name))
+      .map((b) => ({
+        name:      b.name,
+        summary:   String(b.summary || '').slice(0, 120),
+        waitingOn: b.waitingOn ? String(b.waitingOn).slice(0, 80) : null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+const FOCUS_SYSTEM_PROMPT = `You advise an engineering team lead. Given a structured summary of today's signals, write the single most useful thing for them to look at first.
+
+Rules:
+- Two sentences maximum. No preamble, no greeting, no sign-off.
+- Name specific people and ticket keys from the data.
+- Point at the thing most likely to cost the team time if ignored today.
+- Do not restate the whole summary — the lead can already see it.
+- If nothing needs attention, say so plainly in one short sentence.
+- Never suggest disciplining, chasing, or monitoring anyone. Suggest a conversation, an unblock, or a scope decision.`;
+
+/**
+ * Writes the "what I'd look at first" line at the top of the daily brief.
+ *
+ * The rest of the brief is assembled deterministically from database facts —
+ * only this judgement call goes through the model.
+ *
+ * @param {object} signals Plain summary of the day's counts and headline items.
+ * @returns {Promise<string>}
+ */
+async function summariseBriefFocus(signals) {
+  const response = await getClient().messages.create({
+    model: MODEL,
+    max_tokens: 500,
+    thinking: { type: 'adaptive' },
+    system: FOCUS_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: JSON.stringify(signals, null, 2) }],
+  });
+
+  return response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+}
+
 /**
  * Tests the Anthropic API connection with a minimal request.
  * @returns {Promise<boolean>}
  */
-/**
- * Draft a friendly Slack DM for a member who checked out without posting a standup.
- * Warm and non-scolding — acknowledges they have left and gently asks for a quick update.
- *
- * @param {string} memberName   - Member's display name e.g. "Akhil"
- * @param {string} channelName  - Standup channel name e.g. "tech-huddle"
- * @param {string} checkoutTime - Time they checked out e.g. "18:32"
- * @param {string} sprintName   - Current sprint name e.g. "Sprint 12"
- * @returns {Promise<string>}   - The DM text ready to send
- */
-async function draftCheckoutNudgeDM(memberName, channelName, checkoutTime, sprintName) {
-  try {
-    const client = getClient();
-    const res = await client.messages.create({
-      model: MODEL,
-      max_tokens: 200,
-      system: `You are a friendly team assistant. Write a short Slack DM to a developer who just checked out of the office without posting their daily standup update.
-
-Rules:
-- Warm and friendly, never scolding or passive aggressive
-- Acknowledge they have already left for the day — do not ask them to come back
-- Ask them to post a quick update in the standup channel when they have a moment
-- Mention it helps the team and feeds into the sprint report
-- Maximum 3 sentences
-- No bullet points
-- End with a friendly sign-off from "Sprint-Sync Hub"
-- Do not use the word "forgot" — use "haven't had a chance to" instead`,
-      messages: [{
-        role: 'user',
-        content: `Member name: ${memberName}
-Checked out at: ${checkoutTime}
-Standup channel: #${channelName}
-Current sprint: ${sprintName}
-
-Write the DM now.`,
-      }],
-    });
-    return res.content[0]?.text?.trim() ||
-      `Hey ${memberName} 👋 Looks like you haven't had a chance to post your standup in #${channelName} today — no worries since you've already wrapped up! Whenever you get a moment, a quick update would help the team and keep the ${sprintName} report accurate. — Sprint-Sync Hub`;
-  } catch (err) {
-    console.error('[claudeService.draftCheckoutNudgeDM]', err.message);
-    return `Hey ${memberName} 👋 Looks like you haven't had a chance to post your standup in #${channelName} today — no worries since you've already wrapped up for the day! Whenever you get a moment, a quick update would really help the team stay in sync for ${sprintName}. — Sprint-Sync Hub`;
-  }
-}
-
 async function testConnection() {
   try {
     const client = getClient();
@@ -553,10 +604,11 @@ module.exports = {
   draftNoMatchDM,
   draftMissingUpdateDM,
   draftDeadlineDM,
-  draftCheckoutNudgeDM,
   draftMismatchDM,
   draftTeamLeadAlert,
   generateWeeklyReport,
   parseMultiDateStandup,
+  extractBlockers,
+  summariseBriefFocus,
   testConnection,
 };

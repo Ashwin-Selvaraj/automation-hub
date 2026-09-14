@@ -195,41 +195,22 @@ async function sync(orgId, cfg) {
       // ── Nothing on the board matches ──────────────────────────────────────
       } else {
         noMatch++;
-        const canReceiveDM = dbMember ? await performanceService.shouldSendTaskDM(dbMember.id) : true;
 
-        if (canReceiveDM) {
-          const context = isBulkPost
-            ? `${msg.text}\n\n(Note: this update covered multiple days posted in bulk)`
-            : msg.text;
-          let dmText;
-          try {
-            dmText = await claudeService.draftNoMatchDM(
-              memberName, context, process.env.JIRA_SITE_URL || '', cfg.projectKey, cfg.sprintName
-            );
-          } catch (draftErr) {
-            console.error('[standup-sync] draftNoMatchDM failed:', draftErr.message);
-          }
+        // No DM goes to the member. An unmatched standup is Jira hygiene, not
+        // misconduct, and a bot telling someone their update "didn't count"
+        // teaches them to write for the matcher rather than for the team. The
+        // fact is already recorded against the standup post, and the daily
+        // brief surfaces it to the lead, who can ask about it in person.
+        auditLog.record(orgId, {
+          type: 'no_match', userId: msg.user, userName: memberName,
+          slackMessageTs: msg.ts,
+          action: 'Standup matched no Jira task — surfaced in the daily brief',
+          success: true,
+          details: `Confidence: ${analysis.confidence}%. ${analysis.reason}`,
+        });
 
-          if (dmText) {
-            const outcome = await notifier.sendDM({
-              orgId, slackUserId: msg.user, text: dmText,
-              dedupeKey: `no-match-dm:${msg.user}:${today}`,
-              ttlHours: 24, type: 'no_match_dm', userName: memberName,
-              action: 'No-match DM sent — please update Jira',
-            });
-            if (outcome.sent && sprintId && dbMember) {
-              try { await performanceService.recordNoMatchDM(orgId, sprintId, dbMember.id, msg.ts); }
-              catch (perfErr) { console.error('[standup-sync] recordNoMatchDM error:', perfErr.message); }
-            }
-          }
-        } else {
-          auditLog.record(orgId, {
-            type: 'no_match_dm', userId: msg.user, userName: memberName,
-            action: 'No-match DM skipped — managerial role exempt', success: true,
-          });
-        }
-
-        // Alert the lead once per person per day, rather than on every run.
+        // Record it once per person per day so the lead sees it in the brief
+        // and the mismatch history, without re-alerting on every sync run.
         if (await idempotency.claim(orgId, `no-match-lead:${msg.user}:${today}`, 24)) {
           try {
             await mismatchService.handleMismatch(
@@ -237,7 +218,7 @@ async function sync(orgId, cfg) {
               msg.text, { ...analysis, matchType: 'no_match' }
             );
           } catch (leadErr) {
-            console.warn('[standup-sync] lead alert failed:', leadErr.message);
+            console.warn('[standup-sync] mismatch record failed:', leadErr.message);
           }
         }
       }

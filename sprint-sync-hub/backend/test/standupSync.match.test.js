@@ -44,7 +44,6 @@ stubModule('services/claudeService', {
   draftNoMatchDM:       async () => '',
   draftMissingUpdateDM: async () => '',
   draftDeadlineDM:      async () => '',
-  draftCheckoutNudgeDM: async () => '',
   draftMismatchDM:      async () => '',
   draftTeamLeadAlert:   async () => '',
   generateWeeklyReport: async () => '',
@@ -81,7 +80,6 @@ stubModule('services/performanceService', {
   computeSprintSummary:       async () => {},
   getTeamLeaderboard:         async () => [],
   getAtRiskMembers:           async () => [],
-  recordCheckoutWithoutStandup: async () => ({ dmSent: false, alreadyRecorded: false, reason: 'n/a' }),
 });
 
 stubModule('repositories/statsRepository', { upsertDailyStats: async () => {} });

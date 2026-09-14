@@ -25,6 +25,10 @@ export const getOverdueIssues = () => request('/api/jira/overdue');
 export const postJiraComment = (issueKey, text) => request('/api/jira/comment', { method: 'POST', body: JSON.stringify({ issueKey, text }) });
 export const postJiraTransition = (issueKey, statusName) => request('/api/jira/transition', { method: 'POST', body: JSON.stringify({ issueKey, statusName }) });
 
+// The daily brief. Returns both the structured signals and the rendered text,
+// without sending anything — so you can read today's brief before 9am.
+export const getBrief = (date) => request(`/api/brief/today${date ? `?date=${date}` : ''}`);
+
 // Automations — the catalogue is built from what the backend registry declares,
 // so this list stays correct as automations are added or removed.
 export const getAutomations = () => request('/api/automations');

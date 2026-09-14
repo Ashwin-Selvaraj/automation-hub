@@ -1,26 +1,20 @@
 'use strict';
 
 /**
- * Checkout routes — manual nudge and history.
- * Mounted at /api/checkout in server.js.
+ * Checkout history. Mounted at /api/checkout in server.js.
  *
- * The "today's checkout status" endpoint was removed — it derived "checked
- * out" from Zoho Chat presence going offline, which is not the same signal
- * as a real Zoho People check-out and was misleading. Real-time checkout
- * detection (cron Job 5 in cron.js) already only fires on genuine Zoho
- * webhook check-out events; see attendanceService.js.
+ * The nudge endpoint that lived here was removed along with the checkout
+ * watcher: messaging someone because they logged off without posting reads as
+ * surveillance, and the same fact now reaches the lead as one line in the
+ * daily brief. What remains is read-only history for the Performance tab.
  */
 
 const express            = require('express');
 const router             = express.Router();
-const attendanceService  = require('../services/attendanceService');
-const performanceService = require('../services/performanceService');
 const memberRepo         = require('../repositories/memberRepository');
 const standupRepo        = require('../repositories/standupRepository');
 const notifRepo          = require('../repositories/notificationRepository');
-const sprintRepo         = require('../repositories/sprintRepository');
 const statsRepo          = require('../repositories/statsRepository');
-const auditLog = require('../core/auditLog');
 const { getOrgId } = require('../core/orgContext');
 
 function toDateStr(d) {
@@ -28,53 +22,6 @@ function toDateStr(d) {
   if (typeof d === 'string') return d.substring(0, 10);
   return d.toISOString().split('T')[0];
 }
-
-// ─── POST /api/checkout/nudge/:memberId ──────────────────────────────────────
-// Manually trigger a checkout nudge DM for a specific member.
-
-router.post('/nudge/:memberId', async (req, res) => {
-  try {
-    const orgId    = getOrgId();
-    const memberId = parseInt(req.params.memberId, 10);
-    const reason   = req.body?.reason || 'manual trigger';
-
-    const sprint   = await sprintRepo.getActiveSprint(orgId);
-    if (!sprint) return res.status(400).json({ error: 'No active sprint found' });
-
-    const member = await memberRepo.findById(memberId);
-    if (!member || member.organisation_id !== orgId) {
-      return res.status(404).json({ error: 'Member not found' });
-    }
-
-    // Use today's real checkout time if the unified attendance source has one
-    // (only ever populated from a genuine Zoho webhook event) — otherwise
-    // fall back to now.
-    let checkoutTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    try {
-      const attendanceToday = await attendanceService.getTodayAttendance(orgId);
-      const att = (attendanceToday.members || []).find((m) => m.memberId === memberId);
-      if (att?.checkOutTime) checkoutTime = att.checkOutTime;
-    } catch (_) { /* non-fatal — fall back to now */ }
-
-    auditLog.record(getOrgId(), {
-      type: 'manual_nudge', userId: member.slack_user_id, userName: member.name,
-      action: `Manual nudge triggered — reason: ${reason}`, success: true,
-    });
-
-    const result = await performanceService.recordCheckoutWithoutStandup(
-      orgId, sprint.id, memberId, checkoutTime
-    );
-
-    res.json({
-      success: true,
-      dmSent:  result.dmSent,
-      message: result.reason,
-      member:  { id: member.id, name: member.name, slackUserId: member.slack_user_id },
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ─── GET /api/checkout/history ────────────────────────────────────────────────
 // Returns checkout + standup history for a member for the last N days.

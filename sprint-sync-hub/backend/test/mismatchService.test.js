@@ -59,7 +59,7 @@ test('handleMismatch: idempotency — skips everything if already notified in th
   assert.equal(calls.recorded, 0);
 });
 
-test('handleMismatch: sends member DM + lead alert on a fresh mismatch', async () => {
+test('handleMismatch: records the event and alerts the lead, and messages the member never', async () => {
   resetCalls();
   wasNotifiedRecentlyReturn = false;
   memberRolesReturn = null;
@@ -70,14 +70,18 @@ test('handleMismatch: sends member DM + lead alert on a fresh mismatch', async (
     { matchType: 'unassigned_task', mismatchDetails: 'wrong task' }
   );
 
-  assert.equal(result.memberDmSent, true);
   assert.equal(result.leadAlertSent, true);
   assert.equal(result.recorded, true);
-  assert.deepEqual(calls.dmSent, ['U1']);
   assert.deepEqual(calls.leadAlerts, ['ULEAD']);
+
+  // The member DM is gone by design. People pick up other work because they
+  // were asked to, or because their own task was blocked — a bot asserting a
+  // fault gets that wrong often, and is resented when it does.
+  assert.equal(result.memberDmSent, false);
+  assert.deepEqual(calls.dmSent, [], 'the member must not be DMed about off-plan work');
 });
 
-test('handleMismatch: managerial-only members are exempt from the member DM but the lead is still alerted', async () => {
+test('handleMismatch: a managerial member is treated the same — nobody is DMed', async () => {
   resetCalls();
   wasNotifiedRecentlyReturn = false;
   memberRolesReturn = { roles: [{ name: 'Manager' }], shouldReceiveTaskDms: false };
@@ -93,7 +97,7 @@ test('handleMismatch: managerial-only members are exempt from the member DM but 
   assert.deepEqual(calls.dmSent, []);
 });
 
-test('handleMismatch: no_match events never send a member DM directly, only alert the lead', async () => {
+test('handleMismatch: no_match events also reach only the lead', async () => {
   resetCalls();
   wasNotifiedRecentlyReturn = false;
   memberRolesReturn = null;
@@ -106,4 +110,5 @@ test('handleMismatch: no_match events never send a member DM directly, only aler
 
   assert.equal(result.memberDmSent, false);
   assert.equal(result.leadAlertSent, true);
+  assert.deepEqual(calls.dmSent, []);
 });

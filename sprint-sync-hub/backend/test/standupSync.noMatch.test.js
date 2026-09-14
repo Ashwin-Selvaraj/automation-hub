@@ -1,13 +1,14 @@
 'use strict';
 
 /**
- * The standup-sync automation must never send a person-facing DM without
- * handing the notifier a dedupe key, and must respect the notifier's answer.
+ * The inversion, pinned.
  *
- * Deduplication used to live in a 500-entry in-memory array, so a restart — or
- * simply a busy channel evicting the record — let the sync re-send a no-match
- * DM to someone who had already received one. Sending now goes through
- * core/notifier, which refuses any send that arrives without a key.
+ * When a standup matches no Jira task, the member must not be messaged. That
+ * used to send a DM telling them their update didn't count, which taught people
+ * to write for the matcher rather than for the team. The fact is now recorded
+ * and surfaced to the lead in the daily brief instead.
+ *
+ * These tests fail loudly if a person-facing DM is ever reintroduced here.
  */
 
 const test   = require('node:test');
@@ -16,20 +17,21 @@ const { stubModule } = require('./helpers/mockRequire');
 
 process.env.ORGANISATION_ID = '1';
 
-const calls = { sends: [], claims: [] };
-let notifierResult = { sent: true };
+const calls = { notifierSends: [], rawSlackDMs: [], claims: [], mismatches: [], audit: [] };
 
 function reset() {
-  calls.sends = [];
+  calls.notifierSends = [];
+  calls.rawSlackDMs = [];
   calls.claims = [];
-  notifierResult = { sent: true };
+  calls.mismatches = [];
+  calls.audit = [];
 }
 
 stubModule('services/slackService', {
   getChannelMessages: async () => [
     { text: 'Spent the day on research, nothing on the board yet', user: 'U1', ts: '1700000000.000100' },
   ],
-  sendDM: async () => { throw new Error('standup-sync must not call slackService directly'); },
+  sendDM: async (userId, text) => { calls.rawSlackDMs.push({ userId, text }); },
   postToChannel: async () => {},
 });
 
@@ -46,17 +48,18 @@ stubModule('services/claudeService', {
     matched: false, confidence: 10, issueKey: null, matchType: 'no_match',
     reason: 'nothing on the board resembles this', suggestedStatus: null, commentText: null,
   }),
+  // Present so that calling it would succeed — the point is that it is not called.
   draftNoMatchDM: async () => 'please update Jira',
 });
 
 stubModule('core/notifier', {
-  sendDM: async (opts) => { calls.sends.push(opts); return notifierResult; },
+  sendDM: async (opts) => { calls.notifierSends.push(opts); return { sent: true }; },
   postToChannel: async () => ({ sent: true }),
 });
 
 stubModule('core/auditLog', {
-  record:                () => Promise.resolve(),
-  list:                  async () => [],
+  record: (orgId, entry) => { calls.audit.push(entry); return Promise.resolve(); },
+  list: async () => [],
   userIdsWithEntrySince: async () => new Set(),
 });
 
@@ -76,7 +79,13 @@ stubModule('services/performanceService', {
   recordNoMatchDM:   async () => {},
 });
 
-stubModule('services/mismatchService', { handleMismatch: async () => ({}) });
+stubModule('services/mismatchService', {
+  handleMismatch: async (orgId, sprintId, member, text, analysis) => {
+    calls.mismatches.push({ name: member.name, matchType: analysis.matchType });
+    return {};
+  },
+});
+
 stubModule('repositories/statsRepository', { upsertDailyStats: async () => {} });
 stubModule('repositories/sprintRepository', { getActiveSprint: async () => ({ id: 10 }) });
 stubModule('repositories/memberRepository', { findOrCreate: async () => ({ id: 1, name: 'Alice' }), findAll: async () => [] });
@@ -98,33 +107,35 @@ const CFG = {
 };
 const ctx = () => ({ orgId: 1, cfg: CFG, trigger: 'manual' });
 
-test('a no-match DM is always sent with a dated, per-person dedupe key', async () => {
+test('an unmatched standup sends the member nothing at all', async () => {
   reset();
   await standupSync.run(ctx());
 
-  assert.equal(calls.sends.length, 1, 'expected exactly one DM attempt');
-  const send = calls.sends[0];
-  assert.equal(send.slackUserId, 'U1');
-  assert.match(send.dedupeKey, /^no-match-dm:U1:\d{4}-\d{2}-\d{2}$/);
-  assert.equal(send.type, 'no_match_dm');
+  assert.deepEqual(calls.notifierSends, [], 'no DM may be sent to the member');
+  assert.deepEqual(calls.rawSlackDMs, [], 'and nothing may bypass the notifier either');
 });
 
-test('the sync keeps running when the notifier reports the DM was already sent', async () => {
+test('the unmatched standup is still counted and recorded', async () => {
   reset();
-  notifierResult = { sent: false, reason: 'already sent' };
-
   const result = await standupSync.run(ctx());
 
-  assert.equal(result.noMatch, 1, 'the message is still counted');
-  assert.equal(result.errors, 0, 'a suppressed DM is not an error');
+  assert.equal(result.noMatch, 1, 'the message is still counted as unmatched');
+  assert.equal(result.errors, 0);
+
+  assert.ok(
+    calls.audit.some((e) => e.type === 'no_match' && e.userName === 'Alice'),
+    'the fact must be written to the audit trail so the brief can surface it'
+  );
 });
 
-test('the lead alert is claimed once per person per day, separately from the DM', async () => {
+test('the mismatch event is recorded once per person per day, not once per run', async () => {
   reset();
   await standupSync.run(ctx());
 
   assert.ok(
     calls.claims.some((k) => /^no-match-lead:U1:\d{4}-\d{2}-\d{2}$/.test(k)),
-    'expected a dated lead-alert claim so the lead is not re-alerted on every run'
+    'expected a dated claim so repeated syncs do not re-record the same day'
   );
+  assert.equal(calls.mismatches.length, 1);
+  assert.equal(calls.mismatches[0].matchType, 'no_match');
 });

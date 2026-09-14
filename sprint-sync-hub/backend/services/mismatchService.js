@@ -69,42 +69,20 @@ async function handleMismatch(organisationId, sprintId, member, messageText, mat
   let leadAlertSent = false;
   let recorded      = false;
 
-  // ── STEP 4: Draft and send member DM (only for unassigned/different_project,
-  //            and only if member should receive task DMs based on their role) ─
-  if (matchType === 'unassigned_task' || matchType === 'different_project') {
-    const canReceiveDM = memberId
-      ? await memberRoleRepository.getMemberWithRoles(memberId)
-          .then((m) => !m || !m.roles || m.roles.length === 0 || m.shouldReceiveTaskDms)
-          .catch(() => true)
-      : true;
-
-    if (canReceiveDM) {
-      try {
-        const sprintName = process.env.SPRINT_NAME || 'this sprint';
-        const dmText = await claudeService.draftMismatchDM(
-          member.name,
-          messageText,
-          taskSummary,
-          matchType,
-          details,
-          sprintName,
-        );
-        await slackService.sendDM(slackUserId, dmText);
-        memberDmSent = true;
-
-        // Record notification for idempotency
-        try {
-          await notifRepo.recordNotification(organisationId, memberId, 'task_mismatch', 'dm', null);
-        } catch (_) { /* non-fatal */ }
-
-        console.log(`[mismatchService] Mismatch DM sent to ${member.name} (${matchType})`);
-      } catch (err) {
-        console.error(`[mismatchService] Member DM failed for ${member.name}:`, err.message);
-      }
+  // ── STEP 4: The member is not messaged ────────────────────────────────────
+  // A bot telling someone they worked on the wrong ticket is the single most
+  // resented message this system used to send, and it is usually wrong about
+  // the reason — people pick up other work because they were asked to, because
+  // they were unblocked and their own task wasn't, or because the board is out
+  // of date. The event is recorded below and reaches the lead in the daily
+  // brief, where a person can ask why instead of asserting a fault.
+  if (memberId) {
+    try {
+      await notifRepo.recordNotification(organisationId, memberId, 'task_mismatch', 'dm', null);
+    } catch (err) {
+      console.warn('[mismatchService] could not record mismatch notification:', err.message);
     }
   }
-  // For no_match the existing no-match DM flow handles the member DM,
-  // but we still want to alert the lead and record the event.
 
   // ── STEP 5: Draft and send team lead alert ────────────────────────────────
   if (leadSlackId) {
