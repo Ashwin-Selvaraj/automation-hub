@@ -3,6 +3,7 @@
 const express      = require('express');
 const router       = express.Router();
 const briefService = require('../services/briefService');
+const deliveryRiskService = require('../services/deliveryRiskService');
 const { getOrgId } = require('../core/orgContext');
 
 /**
@@ -25,6 +26,27 @@ router.get('/today', async (req, res) => {
   } catch (err) {
     console.error('[GET /api/brief/today]', err.message);
     res.status(500).json({ error: 'Could not build the brief' });
+  }
+});
+
+/**
+ * GET /api/brief/risk
+ *
+ * Delivery risk on its own: the throughput forecast, who is holding too much
+ * started work, and what was added after the sprint began. The same assessment
+ * the brief carries, for a dashboard that wants to show it separately.
+ */
+router.get('/risk', async (req, res) => {
+  try {
+    const wipLimit = parseInt(req.query.wipLimit || '', 10);
+    const risk = await deliveryRiskService.assess(getOrgId(), {
+      wipLimit: Number.isInteger(wipLimit) && wipLimit > 0 ? wipLimit : undefined,
+    });
+    if (!risk) return res.status(404).json({ error: 'No active sprint to assess' });
+    res.json(risk);
+  } catch (err) {
+    console.error('[GET /api/brief/risk]', err.message);
+    res.status(500).json({ error: 'Could not assess delivery risk' });
   }
 });
 
