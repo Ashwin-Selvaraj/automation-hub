@@ -9,11 +9,27 @@ const { startCronJobs }   = require('./cron');
 const { testConnection, runMigrations } = require('./db');
 const sprintRepo   = require('./repositories/sprintRepository');
 const memberRepo   = require('./repositories/memberRepository');
+const { getOrgId } = require('./core/orgContext');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: '*' }));
+// Dashboard is hosted separately from the API, so cross-origin is expected —
+// but restrict it to known origins instead of reflecting any caller.
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, cb) {
+    // No Origin header: same-origin, curl, or a server-to-server call like the
+    // Zoho webhook. CORS is not what protects those — the API key and the
+    // webhook secret are.
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error(`Origin ${origin} is not allowed`));
+  },
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -84,7 +100,7 @@ async function boot() {
   const cfg = configService.getSprintConfig();
 
   // 4. Ensure default organisation exists
-  const orgId   = parseInt(process.env.ORGANISATION_ID || '1', 10);
+  const orgId   = getOrgId();
   const orgName = process.env.ORGANISATION_NAME || cfg.sprintName || 'My Organisation';
   const { query } = require('./db');
   await query(
@@ -193,7 +209,11 @@ async function boot() {
   // fallback. The old Zoho People attendance REST API polling was removed —
   // it returned error 7201 (module disabled) on every endpoint variant tried.
   console.log('[Startup] Attendance sources: Zoho webhook > Zoho presence > Slack fallback');
-  console.log('[Startup]   Webhook URL: /api/webhooks/zoho-attendance');
+  if (process.env.ZOHO_WEBHOOK_SECRET) {
+    console.log('[Startup]   Webhook URL: /api/webhooks/zoho-attendance/<ZOHO_WEBHOOK_SECRET>');
+  } else {
+    console.log('[Startup]   Webhook disabled — set ZOHO_WEBHOOK_SECRET to enable it');
+  }
 
   // 7. Start Express
   app.listen(PORT, () => {

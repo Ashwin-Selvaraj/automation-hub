@@ -21,8 +21,8 @@
 
 const { query }    = require('../db');
 const zohoService  = require('./zohoService');
+const { getOrgId } = require('../core/orgContext');
 
-const ORG_ID          = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
 const WORK_START_TIME = () => process.env.WORK_START_TIME  || '09:00';
 const LATE_GRACE_MINS = () => parseInt(process.env.LATE_GRACE_MINUTES || '15', 10);
 
@@ -76,7 +76,7 @@ async function processZohoWebhook(payload) {
 
     const memberRes = await query(
       'SELECT id, name FROM members WHERE LOWER(email) = $1 AND organisation_id = $2',
-      [email, ORG_ID()]
+      [email, getOrgId()]
     );
     if (!memberRes.rows.length) {
       console.warn(`[Webhook] No member found for email: ${email}`);
@@ -106,7 +106,7 @@ async function processZohoWebhook(payload) {
          check_out_time = CASE WHEN $6 AND $7::TEXT IS NOT NULL THEN $7 ELSE attendance_records.check_out_time END,
          updated_at     = NOW()`,
       [
-        ORG_ID(), member.id, dateStr,
+        getOrgId(), member.id, dateStr,
         isCheckIn,  isCheckIn  ? timeStr : null,
         isCheckOut, isCheckOut ? timeStr : null,
         JSON.stringify(payload),
@@ -128,7 +128,7 @@ async function _getWebhookAttendance(date) {
               checked_out, check_out_time::text AS check_out_time, status
        FROM attendance_records
        WHERE organisation_id = $1 AND attendance_date = $2 AND source = 'zoho_webhook'`,
-      [ORG_ID(), date]
+      [getOrgId(), date]
     );
     return res.rows;
   } catch (err) {
@@ -152,7 +152,7 @@ async function _getSlackPresenceAttendance(members, date) {
          AND post_date = $2
          AND member_id = ANY($3)
        GROUP BY member_id`,
-      [ORG_ID(), date, members.map(m => m.id)]
+      [getOrgId(), date, members.map(m => m.id)]
     );
 
     const postMap = {};
@@ -169,7 +169,11 @@ async function _getSlackPresenceAttendance(members, date) {
 
     return members.map(m => {
       const post = postMap[m.id];
-      if (!post) return { memberId: m.id, checkedIn: false, status: 'absent', source: 'slack_presence' };
+      // No standup post is NOT evidence of absence — this source infers presence
+      // from having posted, so "didn't post" and "wasn't here" are the same
+      // observation. Reporting it as absent used to make the end-of-day job skip
+      // exactly the people its reminder exists for.
+      if (!post) return { memberId: m.id, checkedIn: null, status: 'unknown', source: 'slack_presence' };
 
       const workStart   = (m.work_start_time || WORK_START_TIME()).substring(0, 5);
       const lateByMins  = Math.max(0, minutesDiff(workStart, post.firstPostTime));
@@ -189,7 +193,7 @@ async function _getSlackPresenceAttendance(members, date) {
     });
   } catch (err) {
     console.warn('[Attendance:Slack] Failed:', err.message);
-    return members.map(m => ({ memberId: m.id, checkedIn: false, status: 'absent', source: 'slack_presence' }));
+    return members.map(m => ({ memberId: m.id, checkedIn: null, status: 'unknown', source: 'slack_presence' }));
   }
 }
 
@@ -214,7 +218,7 @@ async function _getSlackPresenceAttendance(members, date) {
  */
 async function getTodayAttendance(organisationId) {
   const date  = getTodayIST();
-  const orgId = organisationId || ORG_ID();
+  const orgId = organisationId || getOrgId();
 
   // Load members
   let members = [];
@@ -320,20 +324,26 @@ async function getTodayAttendance(organisationId) {
       ? member.work_start_time.substring(0, 5)
       : WORK_START_TIME();
 
-    if (!data || !data.checkedIn) {
+    // Three states, not two. A source that positively reports someone did not
+    // check in gives checkedIn === false; a source that simply has no signal
+    // gives null. Collapsing those into "absent" is what let the end-of-day job
+    // skip people it should have reminded.
+    if (!data || data.checkedIn !== true) {
+      const known = Boolean(data) && data.checkedIn === false;
       return {
-        memberId:      member.id,
-        name:          member.name,
-        email:         member.email,
-        slackUserId:   member.slack_user_id,
-        checkedIn:     false,
-        checkInTime:   null,
-        checkedOut:    false,
-        checkOutTime:  null,
-        status:        'absent',
-        isLate:        false,
-        lateByMinutes: 0,
-        source:        data?.source || 'no_data',
+        memberId:        member.id,
+        name:            member.name,
+        email:           member.email,
+        slackUserId:     member.slack_user_id,
+        checkedIn:       false,
+        attendanceKnown: known,
+        checkInTime:     null,
+        checkedOut:      false,
+        checkOutTime:    null,
+        status:          known ? 'absent' : 'unknown',
+        isLate:          false,
+        lateByMinutes:   0,
+        source:          data?.source || 'no_data',
       };
     }
 
@@ -342,12 +352,13 @@ async function getTodayAttendance(organisationId) {
     const isLate      = lateByMins > LATE_GRACE_MINS();
 
     return {
-      memberId:      member.id,
-      name:          member.name,
-      email:         member.email,
-      slackUserId:   member.slack_user_id,
-      checkedIn:     true,
-      checkInTime:   checkInStr,
+      memberId:        member.id,
+      name:            member.name,
+      email:           member.email,
+      slackUserId:     member.slack_user_id,
+      checkedIn:       true,
+      attendanceKnown: true,
+      checkInTime:     checkInStr,
       checkedOut:    data.checkedOut  || false,
       checkOutTime:  data.checkOutTime ? String(data.checkOutTime).substring(0, 5) : null,
       status:        isLate ? 'late' : (data.status || 'present'),
@@ -377,7 +388,7 @@ async function getTodayAttendance(organisationId) {
          late_by_minutes = EXCLUDED.late_by_minutes,
          updated_at      = NOW()`,
       [
-        ORG_ID(), r.memberId, date, r.source,
+        getOrgId(), r.memberId, date, r.source,
         r.checkedIn,  r.checkInTime  || null,
         r.checkedOut, r.checkOutTime || null,
         r.status, r.isLate, r.lateByMinutes,
@@ -386,7 +397,10 @@ async function getTodayAttendance(organisationId) {
   }
 
   const present = result.filter(r => r.checkedIn);
-  const absent  = result.filter(r => !r.checkedIn);
+  // "absent" now means a source actually said so. Members we simply have no
+  // signal for are reported separately instead of being counted as absent.
+  const absent  = result.filter(r => !r.checkedIn && r.attendanceKnown);
+  const unknown = result.filter(r => !r.checkedIn && !r.attendanceKnown);
   const late    = result.filter(r => r.isLate);
 
   return {
@@ -396,12 +410,14 @@ async function getTodayAttendance(organisationId) {
     members:       result,
     present,
     absent,
+    unknown,
     late,
     onLeave:       [],
     summary: {
       total:   result.length,
       present: present.length,
       absent:  absent.length,
+      unknown: unknown.length,
       late:    late.length,
       onLeave: 0,
       noData:  result.filter(r => r.source === 'no_data').length,
@@ -415,8 +431,8 @@ function _emptyResult(date) {
     configured: true,
     date,
     source: 'no_data',
-    members: [], present: [], absent: [], late: [], onLeave: [],
-    summary: { total: 0, present: 0, absent: 0, late: 0, onLeave: 0, noData: 0 },
+    members: [], present: [], absent: [], unknown: [], late: [], onLeave: [],
+    summary: { total: 0, present: 0, absent: 0, unknown: 0, late: 0, onLeave: 0, noData: 0 },
     sourceDetails: { zohoPresenceUsed: false, webhookDataExists: false, slackUsed: false },
   };
 }
@@ -447,7 +463,7 @@ async function getTeamAttendanceHistory(organisationId, days) {
      WHERE ar.organisation_id = $1
        AND ar.attendance_date >= CURRENT_DATE - ($2 || ' days')::INTERVAL
      ORDER BY ar.attendance_date DESC, m.name`,
-    [organisationId || ORG_ID(), days || 7]
+    [organisationId || getOrgId(), days || 7]
   );
   return res.rows;
 }

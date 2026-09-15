@@ -50,6 +50,19 @@ async function findBySprintAndAssignee(sprintId, assigneeId) {
   }
 }
 
+async function findByJiraKey(organisationId, jiraKey) {
+  try {
+    const { rows } = await db.query(
+      'SELECT * FROM tasks WHERE organisation_id = $1 AND jira_key = $2',
+      [organisationId, jiraKey]
+    );
+    return rows[0] || null;
+  } catch (err) {
+    console.error('[taskRepository.findByJiraKey]', err.message);
+    throw err;
+  }
+}
+
 async function markCompleted(taskId) {
   try {
     const { rows } = await db.query(
@@ -163,4 +176,4 @@ async function getActiveTaskCountsPerMember(organisationId) {
   }
 }
 
-module.exports = { upsertTask, findBySprintAndAssignee, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember, getIncompleteTasksBySprint, getByIds };
+module.exports = { upsertTask, findBySprintAndAssignee, findByJiraKey, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember, getIncompleteTasksBySprint, getByIds };

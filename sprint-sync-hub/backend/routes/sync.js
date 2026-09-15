@@ -3,12 +3,9 @@
 const express = require('express');
 const router = express.Router();
 const { runHuddleSync } = require('../cron');
-const activityLog = require('../services/activityLog');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
-
-function orgId() {
-  return parseInt(process.env.ORGANISATION_ID || '1', 10);
-}
+const { getOrgId } = require('../core/orgContext');
+const auditLog = require('../core/auditLog');
 
 /**
  * POST /api/sync/run
@@ -33,16 +30,16 @@ router.post('/run', async (req, res) => {
  * which every call site sets consistently.
  */
 router.get('/log', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 500);
   try {
-    const limit = parseInt(req.query.limit || '50', 10);
-    const { names: managerialNames } = await memberRoleRepository.getManagerialMemberKeys(orgId());
-    const entries = activityLog.getEntries(500)
+    const { names: managerialNames } = await memberRoleRepository.getManagerialMemberKeys(getOrgId());
+    const entries = (await auditLog.list(getOrgId(), 500))
       .filter((e) => !managerialNames.has(e.userName))
       .slice(0, limit);
     res.json({ entries });
   } catch (err) {
     console.error('[GET /api/sync/log]', err.message);
-    res.json({ entries: activityLog.getEntries(parseInt(req.query.limit || '50', 10)) });
+    res.status(500).json({ error: 'Could not load the activity log' });
   }
 });
 

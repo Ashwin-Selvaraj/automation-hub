@@ -31,8 +31,12 @@ async function wasNotifiedRecently(memberId, type, referenceId, withinHours) {
     const { rows } = await db.query(sql, params);
     return rows.length > 0;
   } catch (err) {
-    console.error('[notificationRepository.wasNotifiedRecently]', err.message);
-    return false;
+    // Fail closed. Returning false here used to mean "nobody has been told
+    // yet", so a transient database error turned into a duplicate DM — the one
+    // outcome this check exists to prevent. Suppressing a notification is the
+    // cheaper mistake.
+    console.error('[notificationRepository.wasNotifiedRecently] assuming already notified:', err.message);
+    return true;
   }
 }
 

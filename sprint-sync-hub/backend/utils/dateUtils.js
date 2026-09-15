@@ -20,18 +20,6 @@ function getSprintWindow() {
 }
 
 /**
- * Determines if a given date string falls within the current sprint window.
- * @param {string} dateStr - ISO date string or YYYY-MM-DD
- * @returns {boolean}
- */
-function isInSprintWindow(dateStr) {
-  const { start, end } = getSprintWindow();
-  const date = new Date(dateStr);
-  const dayStart = new Date(date.toISOString().split('T')[0] + 'T00:00:00.000Z');
-  return dayStart >= start && dayStart <= end;
-}
-
-/**
  * Returns an array of week objects for each week in the sprint.
  * @returns {Array<{ label: string, start: Date, end: Date }>}
  */
@@ -56,15 +44,6 @@ function getSprintWeeks() {
 }
 
 /**
- * Converts a YYYY-MM-DD date string to a Unix timestamp (seconds).
- * @param {string} dateStr - YYYY-MM-DD
- * @returns {number}
- */
-function toUnixTimestamp(dateStr) {
-  return Math.floor(new Date(dateStr + 'T00:00:00.000Z').getTime() / 1000);
-}
-
-/**
  * Counts Mon–Fri working days since the given date up to today.
  * @param {string} dateStr - YYYY-MM-DD
  * @returns {number}
@@ -84,4 +63,4 @@ function getWorkingDaysSince(dateStr) {
   return count;
 }
 
-module.exports = { getSprintWindow, isInSprintWindow, getSprintWeeks, toUnixTimestamp, getWorkingDaysSince };
+module.exports = { getSprintWindow, getSprintWeeks, getWorkingDaysSince };

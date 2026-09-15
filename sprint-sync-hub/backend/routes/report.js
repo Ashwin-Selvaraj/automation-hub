@@ -5,13 +5,14 @@ const router = express.Router();
 const claudeService = require('../services/claudeService');
 const slackService = require('../services/slackService');
 const jiraService = require('../services/jiraService');
-const { getSprintWindow, getSprintWeeks, toUnixTimestamp, getWorkingDaysSince } = require('../utils/dateUtils');
-const { getSprintConfig } = require('../utils/sprintConfig');
-const activityLog = require('../services/activityLog');
+const { getSprintWindow, getSprintWeeks, getWorkingDaysSince } = require('../utils/dateUtils');
+const { getSprintConfig } = require('../services/configService');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 function orgId() {
-  return parseInt(process.env.ORGANISATION_ID || '1', 10);
+  return getOrgId();
 }
 
 /**
@@ -75,7 +76,7 @@ router.post('/generate', async (req, res) => {
     const memberActivity = buildMemberActivity(rawMessages, trackedMembers, workingDays);
     const reportText = await claudeService.generateWeeklyReport(weekLabel, memberActivity, jiraTasks, cfg.sprintName);
 
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'report_generated',
       action: `${weekLabel} report generated`,
       success: true,
@@ -105,7 +106,7 @@ router.post('/post', async (req, res) => {
       await slackService.sendDM(cfg.managerSlackId, report);
     }
 
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'report_posted',
       action: 'Report posted to Slack channel',
       success: true,

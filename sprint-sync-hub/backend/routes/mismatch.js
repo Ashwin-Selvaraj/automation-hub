@@ -5,19 +5,18 @@ const router     = express.Router();
 const db         = require('../db');
 const sprintRepo = require('../repositories/sprintRepository');
 const memberRepo = require('../repositories/memberRepository');
-
-const ORG_ID = () => parseInt(process.env.ORGANISATION_ID || '1', 10);
+const { getOrgId } = require('../core/orgContext');
 
 async function resolveSprintId(querySprintId) {
   if (querySprintId) return parseInt(querySprintId, 10);
-  const sprint = await sprintRepo.getActiveSprint(ORG_ID());
+  const sprint = await sprintRepo.getActiveSprint(getOrgId());
   return sprint?.id || null;
 }
 
 // ─── GET /api/mismatch/current?sprintId=X ───────────────────────────────────
 router.get('/current', async (req, res) => {
   try {
-    const orgId    = ORG_ID();
+    const orgId    = getOrgId();
     const sprintId = await resolveSprintId(req.query.sprintId);
 
     const { rows } = await db.query(
@@ -68,7 +67,7 @@ router.patch('/:eventId/resolve', async (req, res) => {
            resolution_note = $1
        WHERE id = $2 AND organisation_id = $3
        RETURNING *`,
-      [note || null, parseInt(eventId, 10), ORG_ID()]
+      [note || null, parseInt(eventId, 10), getOrgId()]
     );
 
     if (rows.length === 0) {
@@ -85,7 +84,7 @@ router.patch('/:eventId/resolve', async (req, res) => {
 // ─── GET /api/mismatch/member/:memberId?sprintId=X ──────────────────────────
 router.get('/member/:memberId', async (req, res) => {
   try {
-    const orgId    = ORG_ID();
+    const orgId    = getOrgId();
     const memberId = parseInt(req.params.memberId, 10);
     const sprintId = req.query.sprintId ? parseInt(req.query.sprintId, 10) : null;
 
@@ -108,7 +107,7 @@ router.get('/member/:memberId', async (req, res) => {
 // ─── GET /api/mismatch/stats?sprintId=X ─────────────────────────────────────
 router.get('/stats', async (req, res) => {
   try {
-    const orgId    = ORG_ID();
+    const orgId    = getOrgId();
     const sprintId = await resolveSprintId(req.query.sprintId);
 
     const { rows } = await db.query(

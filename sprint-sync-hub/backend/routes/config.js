@@ -9,9 +9,10 @@ const slackService = require('../services/slackService');
 const jiraService  = require('../services/jiraService');
 const claudeService = require('../services/claudeService');
 const zohoService  = require('../services/zohoService');
-const activityLog  = require('../services/activityLog');
 const memberRepo   = require('../repositories/memberRepository');
 const sprintRepo   = require('../repositories/sprintRepository');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 // ─── GET /api/config ──────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ router.post('/sprint', async (req, res) => {
     // measuring whatever sprint was last active instead of these dates.
     try {
       const cfg   = configService.getSprintConfig();
-      const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+      const orgId = getOrgId();
       const dbSprint = await sprintRepo.upsertSprint(
         orgId, cfg.sprintName, window.startStr, window.endStr, cfg.durationWeeks
       );
@@ -90,17 +91,17 @@ router.post('/team', async (req, res) => {
 
     oldMembers.forEach((m) => {
       if (!newIds.has(m.id)) {
-        activityLog.addEntry({ type: 'team_change', userId: m.id, userName: m.name, action: 'Removed from team', success: true });
+        auditLog.record(getOrgId(), { type: 'team_change', userId: m.id, userName: m.name, action: 'Removed from team', success: true });
       }
     });
     members.forEach((m) => {
       if (!oldIds.has(m.id)) {
-        activityLog.addEntry({ type: 'team_change', userId: m.id, userName: m.name, action: 'Added to team', success: true });
+        auditLog.record(getOrgId(), { type: 'team_change', userId: m.id, userName: m.name, action: 'Added to team', success: true });
       }
     });
 
     // Persist members to DB (members table)
-    const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+    const orgId = getOrgId();
     for (const m of members) {
       try {
         await memberRepo.findOrCreate(orgId, m.id, m.name, m.email || null);
@@ -140,7 +141,7 @@ router.get('/health', async (req, res) => {
 router.get('/env-status', async (req, res) => {
   try {
     // Team members — first try DB, fall back to env
-    const orgId = parseInt(process.env.ORGANISATION_ID || '1', 10);
+    const orgId = getOrgId();
     let dbMembers = [];
     try { dbMembers = await memberRepo.findAll(orgId); } catch (_) {}
 

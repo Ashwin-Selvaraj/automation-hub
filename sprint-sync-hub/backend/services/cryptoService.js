@@ -10,9 +10,10 @@ const ALGO   = 'aes-256-gcm';
 function getKey() {
   const raw = process.env.ENCRYPTION_KEY;
   if (!raw) {
-    // In dev with no key set, fall back to a deterministic dev key (insecure — only for local dev)
-    console.warn('[cryptoService] ENCRYPTION_KEY not set — using dev fallback. Set a real key in production!');
-    return Buffer.from('automation-hub-dev-key-0000000000'.slice(0, 32), 'utf8');
+    throw new Error(
+      'ENCRYPTION_KEY is not set. Stored credentials cannot be read or written without it.\n' +
+      '  Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
+    );
   }
   if (raw.length === 64) return Buffer.from(raw, 'hex');     // 32 bytes as hex
   if (raw.length === 32) return Buffer.from(raw, 'utf8');    // 32 raw chars
@@ -35,17 +36,28 @@ function encrypt(plaintext) {
 /**
  * Decrypts a value produced by encrypt().
  */
+const ENCRYPTED_SHAPE = /^[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]*$/i;
+
+/**
+ * Decrypts a value produced by encrypt().
+ *
+ * Values that were stored before encryption was introduced are passed through
+ * unchanged. A value that IS in encrypted form but fails to decrypt throws —
+ * returning the raw ciphertext instead would hand a corrupt string to whatever
+ * asked for a credential, turning a key mismatch into a confusing API error
+ * somewhere far away.
+ */
 function decrypt(ciphertext) {
   if (ciphertext == null || ciphertext === '') return ciphertext;
+  if (!ENCRYPTED_SHAPE.test(ciphertext)) return ciphertext;
+
+  const [ivHex, tagHex, encHex] = ciphertext.split(':');
   try {
-    const parts = ciphertext.split(':');
-    if (parts.length !== 3) return ciphertext; // not encrypted — return as-is
-    const [ivHex, tagHex, encHex] = parts;
     const decipher = crypto.createDecipheriv(ALGO, getKey(), Buffer.from(ivHex, 'hex'));
     decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
     return decipher.update(Buffer.from(encHex, 'hex'), undefined, 'utf8') + decipher.final('utf8');
-  } catch {
-    return ciphertext; // fallback — return raw value if decryption fails
+  } catch (err) {
+    throw new Error(`Failed to decrypt stored value — ENCRYPTION_KEY may have changed since it was saved (${err.message})`);
   }
 }
 

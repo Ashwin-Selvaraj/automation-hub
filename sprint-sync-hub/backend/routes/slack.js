@@ -3,9 +3,10 @@
 const express = require('express');
 const router = express.Router();
 const slackService = require('../services/slackService');
-const { getSprintWindow, toUnixTimestamp } = require('../utils/dateUtils');
-const { getSprintConfig } = require('../utils/sprintConfig');
-const activityLog = require('../services/activityLog');
+const { getSprintWindow } = require('../utils/dateUtils');
+const { getSprintConfig } = require('../services/configService');
+const auditLog = require('../core/auditLog');
+const { getOrgId } = require('../core/orgContext');
 
 /**
  * GET /api/slack/messages?days=7
@@ -51,7 +52,7 @@ router.post('/dm', async (req, res) => {
       return res.status(400).json({ error: 'userId and message are required' });
     }
     await slackService.sendDM(userId, message);
-    activityLog.addEntry({
+    auditLog.record(getOrgId(), {
       type: 'manual_dm',
       userId,
       action: 'Manual DM sent via dashboard',

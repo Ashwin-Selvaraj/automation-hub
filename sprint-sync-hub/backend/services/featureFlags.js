@@ -1,8 +1,7 @@
 'use strict';
 
 const { query } = require('../db');
-
-const ORG_ID = parseInt(process.env.ORGANISATION_ID || '1');
+const { getOrgId } = require('../core/orgContext');
 
 let cachedFlags = {};
 let cacheLoadedAt = null;
@@ -11,7 +10,7 @@ const CACHE_TTL_MS = 30 * 1000;
 async function loadFlags() {
   const result = await query(
     `SELECT config_key, config_value FROM system_config WHERE organisation_id = $1`,
-    [ORG_ID]
+    [getOrgId()]
   );
   cachedFlags = {};
   result.rows.forEach(row => {
@@ -38,7 +37,7 @@ async function setFlag(key, value) {
      VALUES ($1, $2, $3, NOW())
      ON CONFLICT (organisation_id, config_key)
      DO UPDATE SET config_value = $3, updated_at = NOW()`,
-    [ORG_ID, key, value]
+    [getOrgId(), key, value]
   );
   cacheLoadedAt = null;
 }

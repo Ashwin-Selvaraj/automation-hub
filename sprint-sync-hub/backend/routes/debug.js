@@ -11,6 +11,7 @@
  */
 
 const express = require('express');
+const { getOrgId } = require('../core/orgContext');
 const router  = express.Router();
 
 router.get('/zoho', async (req, res) => {
@@ -48,7 +49,7 @@ router.get('/zoho', async (req, res) => {
   // ── CHECK 2: Token refresh ───────────────────────────────────────────────────
   try {
     const token = await zohoService.getAccessToken();
-    addCheck('Token Refresh', token ? 'PASS' : 'FAIL', { hasAccessToken: !!token, tokenPrefix: token?.substring(0, 15) || null });
+    addCheck('Token Refresh', token ? 'PASS' : 'FAIL', { hasAccessToken: !!token });
   } catch (err) {
     addCheck('Token Refresh', 'FAIL', null, err.message);
     report.conclusion = 'BLOCKED AT TOKEN REFRESH — fix credentials first';
@@ -90,7 +91,7 @@ router.get('/zoho', async (req, res) => {
       `SELECT member_id, checked_in, check_in_time, checked_out, check_out_time
        FROM attendance_records
        WHERE organisation_id = $1 AND attendance_date = $2 AND source = 'zoho_webhook'`,
-      [parseInt(process.env.ORGANISATION_ID || '1', 10), today]
+      [getOrgId(), today]
     );
     addCheck('Webhook rows (today)', 'INFO', {
       rowCount: webhookRows.rows.length,

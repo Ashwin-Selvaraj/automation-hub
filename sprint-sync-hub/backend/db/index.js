@@ -53,16 +53,25 @@ async function runMigrations() {
 
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
     console.log(`[DB] Running migration: ${file}`);
+
+    // One transaction per file, so a migration that fails halfway leaves no
+    // partial schema behind and can be retried after a fix.
+    const client = await pool.connect();
     try {
-      await query(sql);
-      await query(
+      await client.query('BEGIN');
+      await client.query(sql);
+      await client.query(
         'INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING',
         [file]
       );
+      await client.query('COMMIT');
       console.log(`[DB] Migration complete: ${file}`);
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       console.error(`[DB] Migration FAILED: ${file} — ${err.message}`);
       throw err;
+    } finally {
+      client.release();
     }
   }
 }
