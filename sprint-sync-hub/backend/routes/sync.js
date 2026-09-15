@@ -2,7 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { runHuddleSync } = require('../cron');
+const registry = require('../automations/registry');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const { getOrgId } = require('../core/orgContext');
 const auditLog = require('../core/auditLog');
@@ -12,13 +12,12 @@ const auditLog = require('../core/auditLog');
  * Manually triggers the huddle→jira sync for all recent unprocessed messages.
  */
 router.post('/run', async (req, res) => {
-  try {
-    const result = await runHuddleSync();
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] POST /api/sync/run error:`, err.message);
-    res.status(500).json({ error: err.message });
+  const outcome = await registry.runOne('standup-sync', 'manual');
+  if (!outcome.ok) {
+    console.error('[POST /api/sync/run]', outcome.error);
+    return res.status(500).json({ error: outcome.error });
   }
+  res.json({ ok: true, ...(outcome.result || {}) });
 });
 
 /**

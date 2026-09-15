@@ -251,6 +251,18 @@ router.post('/connections', async (req, res) => {
     if (workEndTime       != null) updates['zoho.work_end']             = workEndTime;
 
     await configService.setMany(updates);
+
+    // Automations compute their cron expression from this config, so a changed
+    // time has to be rebuilt into the schedule. The old scheduler read these
+    // once at boot and silently ignored every later change.
+    if (Object.keys(updates).some((k) => k.startsWith('schedule.'))) {
+      try {
+        await require('../automations/registry').reschedule();
+      } catch (err) {
+        console.error('[config] schedule saved but reschedule failed:', err.message);
+      }
+    }
+
     res.json({ ok: true, updated: Object.keys(updates) });
   } catch (err) {
     res.status(500).json({ error: err.message });

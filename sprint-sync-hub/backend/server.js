@@ -5,7 +5,7 @@ const express = require('express');
 const cors    = require('cors');
 const { getSprintWindow } = require('./utils/dateUtils');
 const configService = require('./services/configService');
-const { startCronJobs }   = require('./cron');
+const registry = require('./automations/registry');
 const { testConnection, runMigrations } = require('./db');
 const sprintRepo   = require('./repositories/sprintRepository');
 const memberRepo   = require('./repositories/memberRepository');
@@ -58,6 +58,7 @@ const { requireApiKey } = require('./middleware/auth');
 app.use('/api', requireApiKey);
 
 app.use('/api/config',      require('./routes/config'));
+app.use('/api/automations', require('./routes/automations'));
 app.use('/api/slack',       require('./routes/slack'));
 app.use('/api/jira',        require('./routes/jira'));
 app.use('/api/sync',        require('./routes/sync'));
@@ -233,8 +234,10 @@ async function boot() {
     console.log(`Automation-Hub running. Sprint: ${activeSprint}. Org: ${orgName}. DB: connected.`);
     console.log('');
 
-    // 8. Start cron jobs
-    startCronJobs();
+    // 8. Discover and schedule automations
+    registry.start().catch((err) => {
+      console.error('[boot] Automation registry failed to start:', err.message);
+    });
   });
 }
 
