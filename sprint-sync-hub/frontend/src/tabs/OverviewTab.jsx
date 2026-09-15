@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { theme, styles } from '../theme.js';
-import { getSlackMessages, getJiraIssues, getSyncLog, getAutomations, setAutomationEnabled, runAutomation } from '../api.js';
+import { getSlackMessages, getJiraIssues, getSyncLog, getAutomations, setAutomationEnabled, runAutomation, getBrief } from '../api.js';
 import { API_BASE, apiHeaders } from '../config.js';
 import Card, { SectionHeader } from '../components/Card.jsx';
 import Badge from '../components/Badge.jsx';
@@ -30,6 +30,91 @@ function relativeTime(iso) {
   const hours = Math.round(mins / 60);
   if (hours < 24)  return `${hours}h ago`;
   return `${Math.round(hours / 24)}d ago`;
+}
+
+// ─── Daily brief ──────────────────────────────────────────────────────────────
+
+const BRIEF_SECTIONS = [
+  { key: 'blockers',  label: 'Blocked',      tone: 'urgent' },
+  { key: 'overdue',   label: 'Overdue',      tone: 'urgent' },
+  { key: 'dueSoon',   label: 'Due soon',     tone: 'watch'  },
+  { key: 'stale',     label: 'Not moving',   tone: 'watch'  },
+  { key: 'offPlan',   label: 'Off-plan',     tone: 'watch'  },
+];
+
+function BriefCard() {
+  const [brief, setBrief] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getBrief()
+      .then((d) => { setBrief(d); setError(null); })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const s = brief?.signals;
+  const quiet = (s?.noUpdate?.length || 0) + (s?.unmatched?.length || 0);
+  const counts = s
+    ? BRIEF_SECTIONS.map((sec) => ({ ...sec, n: (s[sec.key] || []).length })).filter((c) => c.n > 0)
+    : [];
+
+  return (
+    <Card style={{ marginBottom: 24 }}>
+      <SectionHeader>Today's brief</SectionHeader>
+
+      {loading && <Spinner />}
+      {error && <div style={{ fontSize: 13, color: colors.red600 }}>{error}</div>}
+
+      {s && (
+        <>
+          {s.focus && (
+            <div style={{
+              fontSize: 14, color: colors.gray900, lineHeight: 1.55,
+              paddingBottom: 14, marginBottom: 14, borderBottom: `1px solid ${colors.gray200 || '#e5e7eb'}`,
+            }}>
+              {s.focus}
+            </div>
+          )}
+
+          {counts.length === 0 && quiet === 0 && (
+            <div style={{ fontSize: 14, color: colors.gray400 }}>
+              Nothing needs your attention this morning.
+            </div>
+          )}
+
+          {counts.length > 0 && (
+            <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', marginBottom: quiet ? 12 : 0 }}>
+              {counts.map((c) => (
+                <div key={c.key}>
+                  <div style={{
+                    fontSize: 22, fontWeight: 500,
+                    color: c.tone === 'urgent' ? colors.red600 : colors.amber600,
+                  }}>{c.n}</div>
+                  <div style={{ fontSize: 11, color: colors.gray400, marginTop: 1 }}>{c.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {quiet > 0 && (
+            <div style={{ fontSize: 12, color: colors.gray400 }}>
+              {quiet === 1 ? '1 person was' : `${quiet} people were`} quiet today.{' '}
+              {[...(s.noUpdate || []), ...(s.unmatched || [])].join(', ')}.
+              {' '}Nobody was messaged about it.
+            </div>
+          )}
+
+          {s.progress?.total > 0 && (
+            <div style={{ fontSize: 12, color: colors.gray400, marginTop: 10 }}>
+              Sprint: {s.progress.done} of {s.progress.total} done · {s.daysLeft} working days left
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
 }
 
 // ─── Automations ──────────────────────────────────────────────────────────────
@@ -573,6 +658,10 @@ export default function OverviewTab({ config, navigate }) {
         <h1 style={styles.pageTitle}>Overview</h1>
         <p style={styles.subtitle}>{config?.sprintName || 'Sprint'} · {config?.startDate} → {config?.endDate}</p>
       </div>
+
+      {/* The same brief that gets DM'd each morning — first thing on the page,
+          because it is the thing worth reading first. */}
+      <BriefCard />
 
       {/* ── Needs Your Attention (mismatch alerts) ── */}
       {mismatchData && mismatchData.events && mismatchData.events.filter((e) => !e.resolved).length > 0 && (

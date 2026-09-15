@@ -278,21 +278,21 @@ export default function HowItWorksTab() {
         />
 
         <TriggerCard
-          icon="⏰"
-          title="End of day — no standup posted"
-          accentColor={colors.amber600} accentBg="#FFFBEB"
-          when={<>EOD check runs at <strong>6:30 PM IST</strong> (Mon–Fri). You are present at work (Zoho shows you checked in) but have not posted anything in #tech-huddle today.</>}
-          what="A DM reminding you to post a quick standup update — even a short one counts."
-          suppressed="Skipped if you are on approved leave, didn't check in (absent), or already checked out more than 1 hour before 6:30 PM."
+          icon="🔇"
+          title="You didn't post a standup"
+          accentColor={colors.gray400} accentBg={colors.gray100}
+          when="Nothing happens to you. This used to send an end-of-day DM, and a second one if you logged off without posting."
+          what={<>Your name appears as one line in the lead's morning brief, under "quiet today". <em>The bot does not message you, and the brief says so explicitly.</em></>}
+          suppressed="If attendance records you as absent, you are not listed at all — you were off, not silent."
         />
 
         <TriggerCard
-          icon="🚪"
-          title="You checked out without posting a standup"
-          accentColor="#D97706" accentBg="#FEF3C7"
-          when="Zoho People shows your checkout time just appeared, and you have no standup post for today. Checked every 15 minutes between 4:30 PM – 7:30 PM."
-          what={<>A warm DM acknowledging you've already left and gently asking you to drop a quick update in #tech-huddle when you have a moment. <em>No urgency, just a nudge.</em></>}
-          suppressed="Won't fire if you already received a missing-standup DM today (20-hour dedup window)."
+          icon="🔀"
+          title="Your update didn't match a Jira task"
+          accentColor={colors.gray400} accentBg={colors.gray100}
+          when="Claude couldn't link your standup to a task on the board, or linked it to one assigned to someone else."
+          what="Nothing is sent to you. It is recorded and shown to the lead, who can ask about it if it matters — people pick up other work for good reasons, and a bot guessing at the reason gets it wrong."
+          suppressed="Recorded once per person per day, so repeated syncs don't re-flag the same thing."
         />
 
         <TriggerCard
@@ -351,18 +351,18 @@ export default function HowItWorksTab() {
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <ShieldRow icon="🌴" title="On approved leave"
-          detail="If Zoho People shows approved leave for today, all standup-related DMs are skipped. The day is excluded from your standup attendance calculation entirely." />
-        <ShieldRow icon="🏠" title="Didn't check in (absent, WFH without Zoho)"
-          detail="If Zoho has no check-in record for you today, the system assumes you're absent and skips the EOD DM. The day is not counted as a missed standup." />
-        <ShieldRow icon="🌅" title="Left early (checked out >1 hour before 6:30 PM)"
-          detail="If your Zoho checkout time is more than 1 hour before the EOD check time, the EOD DM is skipped. The system knows you've already left." />
+        <ShieldRow icon="🔇" title="Not posting a standup sends you nothing"
+          detail="The end-of-day reminder and the checkout nudge were both retired. Whether you posted appears in the lead's morning brief as context, and the brief states plainly that nobody was messaged." />
+        <ShieldRow icon="🏠" title="Recorded absent"
+          detail="If attendance positively records you as absent, you are not listed as quiet at all, and the day is not counted as a missed standup. 'No signal' is not treated as absence — that mistake used to skip exactly the people a reminder was for." />
+        <ShieldRow icon="🌙" title="Outside working hours"
+          detail="Every message to a person passes a quiet-hours check before it sends. A nudge that arrives at 9pm teaches the team that 9pm is working time, so it is held rather than delivered." />
         <ShieldRow icon="🔕" title="Already notified today"
-          detail="A 20-hour deduplication window prevents receiving more than one missing-standup DM per day, regardless of which trigger fired first." />
-        <ShieldRow icon="⚠️" title="No active sprint"
-          detail="The checkout detection job skips entirely if there's no active sprint in the database. No DMs are sent without a sprint context." />
-        <ShieldRow icon="🔌" title="Zoho not configured"
-          detail="If the Zoho People integration is not set up, attendance checks are skipped. EOD reminders still fire, but without leave/absence filtering." />
+          detail="Sending claims a durable key first, so a restart, a redeploy, or two jobs firing at once cannot produce a second copy of the same message." />
+        <ShieldRow icon="🧑‍💼" title="Managerial roles"
+          detail="Members holding only managerial roles are excluded from automated task DMs and from individual activity tracking entirely." />
+        <ShieldRow icon="🎚" title="Any automation can be switched off"
+          detail="The Overview tab lists every automation with a working toggle. Turning one off stops it immediately — no redeploy, no restart." />
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────────── */}
@@ -423,11 +423,11 @@ export default function HowItWorksTab() {
         borderRadius: 10, overflow: 'hidden',
       }}>
         {[
-          { time: '10:00 AM',              days: 'Every day',         label: 'Daily huddle sync',         desc: 'Fetches Slack messages, runs Claude matching, posts Jira comments, sends no-match DMs.',              color: colors.blue600 },
-          { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Deadline check',            desc: 'Finds overdue Jira tasks and sends reminder DMs to assignees.',                                      color: colors.red600  },
-          { time: '6:30 PM',               days: 'Mon – Fri',         label: 'EOD standup check',         desc: 'Checks who hasn\'t posted today. Verifies leave/absence via Zoho before sending any DM.',            color: colors.amber600},
-          { time: 'Every 15 min 4:30–7:30 PM', days: 'Mon – Fri',    label: 'Checkout detection',        desc: 'Polls Zoho for new checkouts. Sends a nudge DM if the member checked out without a standup post.',    color: '#7C3AED'      },
-          { time: 'Friday 5:00 PM',         days: 'Weekly',           label: 'Sprint report',             desc: 'AI-generated sprint summary posted to the standup channel and DM\'d to the manager.',                 color: colors.green600},
+          { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Daily brief',               desc: 'One DM to the lead: who is blocked, what is overdue, what has stopped moving, who was quiet.',      color: colors.blue600 },
+          { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Deadline check',            desc: 'Finds overdue Jira tasks and DMs the assignee — your own work, before anyone escalates it.',         color: colors.red600  },
+          { time: '10:00 AM',              days: 'Every day',         label: 'Standup → Jira sync',       desc: 'Fetches Slack messages, runs Claude matching, posts Jira comments and transitions.',                  color: colors.green600},
+          { time: 'Friday 5:00 PM',         days: 'Weekly',           label: 'Sprint report',             desc: 'AI-generated sprint summary posted to the standup channel and DM\'d to the manager.',                 color: colors.amber600},
+          { time: '3:30 AM',               days: 'Every day',         label: 'Housekeeping',              desc: 'Clears expired deduplication claims and trims the activity log and run history.',                     color: colors.gray400 },
         ].map((job, i, arr) => (
           <div key={job.label} style={{
             display: 'grid', gridTemplateColumns: '160px 1fr',
@@ -479,7 +479,11 @@ export default function HowItWorksTab() {
           },
           {
             q: 'How do I stop receiving a specific DM?',
-            a: 'The best way is to fix the underlying condition (post your standup, update Jira, mark leave in Zoho). There\'s no opt-out. DMs have a 20-hour dedup window so you won\'t receive the same nudge twice in a day.',
+            a: 'Ask your lead to switch that automation off — every one of them has a working toggle on the Overview tab, and turning it off takes effect immediately. Most of what used to generate DMs no longer does: the only message you can now receive about your own work is an overdue-task alert.',
+          },
+          {
+            q: 'Why did the reminders stop?',
+            a: 'Because they were producing compliance rather than information — people learned to write the standup that satisfied the matcher. The same signals now go to the lead each morning in one brief, where a person decides whether something is worth a conversation. The bot notices; the human talks.',
           },
         ].map(({ q, a }) => (
           <Accordion key={q} icon="💬" title={q}>

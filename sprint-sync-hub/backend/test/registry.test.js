@@ -56,13 +56,36 @@ test('every automation produces a valid cron expression, configured or not', () 
   }
 });
 
-test('the standup sync is on by default and the checkout watcher is not', () => {
+test('the surveillance-shaped automation is gone entirely', () => {
   registry.load();
-  const standup  = require(resolveModule('standup-sync'));
-  const checkout = require(resolveModule('checkout-watch'));
+  assert.ok(
+    !registry.keys().includes('checkout-watch'),
+    'the checkout watcher was deleted, not merely disabled'
+  );
+});
+
+test('the core sync and the daily brief are on; the retired nag is not', () => {
+  registry.load();
+  const standup = require(resolveModule('standup-sync'));
+  const brief   = require(resolveModule('daily-brief'));
+  const eod     = require(resolveModule('eod-reminder'));
 
   assert.notEqual(standup.defaultEnabled, false, 'the core sync should default to on');
-  assert.equal(checkout.defaultEnabled, false, 'the checkout watcher should default to off');
+  assert.notEqual(brief.defaultEnabled, false, 'the brief is the point of the system now');
+  assert.equal(eod.defaultEnabled, false, 'the end-of-day nag is retired by default');
+});
+
+test('nothing that messages the team ships enabled by default', () => {
+  registry.load();
+  for (const key of registry.keys()) {
+    const mod = require(resolveModule(key));
+    if (mod.audience === 'member' && mod.defaultEnabled !== false) {
+      assert.equal(
+        key, 'deadline-check',
+        `${key} messages individuals and defaults to on — only the overdue alert is meant to`
+      );
+    }
+  }
 });
 
 test('person-facing automations declare a human audience', () => {

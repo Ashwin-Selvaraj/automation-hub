@@ -16,10 +16,10 @@ const { onDays, parseTime } = require('../schedule');
  * End-of-day nudge for anyone who has not posted a standup, or posted one that
  * matched no Jira task.
  *
- * Scheduled for retirement: in the target design this becomes a line in the
- * daily lead brief rather than a message to the individual. It is kept here,
- * behind a toggle, so the behaviour change is yours to make rather than one
- * that arrives with a deploy.
+ * Retired: both facts now reach the lead as a line in the daily brief, where a
+ * person decides whether they are worth a conversation. This ships disabled and
+ * is kept only so the behaviour can be restored without a deploy — a team that
+ * genuinely wants the reminder can switch it back on.
  */
 
 function toDateStr(d) {
@@ -157,10 +157,10 @@ async function run({ orgId, cfg }) {
 module.exports = {
   key:         'eod-reminder',
   name:        'End-of-day standup reminder',
-  description: 'DMs anyone who has not posted a standup, or whose post matched no Jira task. Skips people recorded absent.',
+  description: 'Retired — the daily brief now tells you who was quiet instead. Switch this on only if you want the bot to chase people directly.',
   category:    'delivery',
   audience:    'member',
-  defaultEnabled: true,
+  defaultEnabled: false,
   schedule: (cfg) => onDays(cfg.eodCheckTime, '18:30', cfg.workdays || '1-5'),
   run,
 };

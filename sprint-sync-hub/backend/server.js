@@ -59,6 +59,7 @@ app.use('/api', requireApiKey);
 
 app.use('/api/config',      require('./routes/config'));
 app.use('/api/automations', require('./routes/automations'));
+app.use('/api/brief',       require('./routes/brief'));
 app.use('/api/slack',       require('./routes/slack'));
 app.use('/api/jira',        require('./routes/jira'));
 app.use('/api/sync',        require('./routes/sync'));
