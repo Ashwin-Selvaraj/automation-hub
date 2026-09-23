@@ -2,11 +2,18 @@ import { API_BASE, apiHeaders } from './config.js';
 
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: apiHeaders({ 'Content-Type': 'application/json', ...options.headers }),
     ...options,
+    credentials: 'include',
+    headers: apiHeaders({ 'Content-Type': 'application/json', ...options.headers }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(data.error || `HTTP ${res.status}`);
+    error.code = data.code;
+    error.status = res.status;
+    error.retryable = data.retryable;
+    throw error;
+  }
   return data;
 }
 
@@ -65,3 +72,17 @@ export const setMemberJiraId   = (memberId, jiraAccountId)     => request(`/api/
 export const fetchSlackEmails  = ()                            => request('/api/members/fetch-slack-emails', { method: 'POST', body: JSON.stringify({}) });
 export const fetchJiraIds      = ()                            => request('/api/members/fetch-jira-ids',     { method: 'POST', body: JSON.stringify({}) });
 export const syncAll           = ()                            => request('/api/members/sync-all',           { method: 'POST', body: JSON.stringify({}) });
+
+// Employee checkout uses an HttpOnly employee session cookie. The shared
+// dashboard API key is never used by the backend to decide employee identity.
+export const getEmployeeSession = () => request('/api/auth/slack/me');
+export const startSlackSignIn = () => request('/api/auth/slack/start');
+export const logoutEmployee = (csrfToken) =>
+  request('/api/auth/slack/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, body: '{}' });
+export const getEmployeeZohoStatus = () => request('/api/employee/zoho/status');
+export const startEmployeeZohoConnect = (csrfToken) =>
+  request('/api/employee/zoho/connect', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, body: '{}' });
+export const disconnectEmployeeZoho = (csrfToken) =>
+  request('/api/employee/zoho/disconnect', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, body: '{}' });
+export const validateEmployeeCheckout = (csrfToken) =>
+  request('/api/employee/checkout/validate', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, body: '{}' });

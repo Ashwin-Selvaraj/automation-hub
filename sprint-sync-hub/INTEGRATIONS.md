@@ -2,6 +2,23 @@
 
 This document explains every integration point between Sprint-Sync Hub and Slack / Jira: what credentials are needed, what API calls are made, and how data flows into the database.
 
+## Employee checkout reminder
+
+The Overview checkout card is a reminder and validation flow, not an attendance writer:
+
+1. The employee signs in through Slack OpenID Connect (`openid profile email`).
+2. The backend validates OAuth state/nonce, restricts the Slack workspace with `SLACK_TEAM_ID`, resolves `members.slack_user_id`, and stores only a hashed opaque session token.
+3. The employee connects their own Zoho account. Zoho state is single-use and bound to that employee session. Only `AaaServer.profile.Read` is requested so the backend can verify that the Zoho email matches the verified Slack email.
+4. `POST /api/employee/checkout/validate` derives the employee from the session. It checks the current `TIMEZONE` day in `SLACK_CHANNEL_ID` by exact Slack user ID. Existing `standup_posts` may satisfy the check; otherwise Slack channel history is paginated.
+5. Top-level messages count. Thread replies, messages from another Slack ID, and messages outside the current local day do not.
+6. On `UPDATE_FOUND`, the backend returns the administrator-supplied `ZOHO_CHECKOUT_URL`. The browser opens it in a new tab. No attendance endpoint is called and no punch-out is recorded.
+
+Employee endpoints return `NOT_CONNECTED`, `UPDATE_FOUND`, `UPDATE_MISSING`, or `SLACK_ERROR`. Provider failures are retryable and are not reported as missing updates.
+
+Required checkout settings are `FRONTEND_URL`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_TEAM_ID`, `SLACK_OIDC_REDIRECT_URI`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_OAUTH_REDIRECT_URI`, `ZOHO_ACCOUNTS_SERVER`, `ZOHO_CHECKOUT_URL`, `SLACK_CHANNEL_ID`, `TIMEZONE`, and `ENCRYPTION_KEY`. `SLACK_CHANNEL_URL` and `EMPLOYEE_SESSION_TTL_HOURS` are optional.
+
+Zoho `location`, `accounts-server`, and `api_domain` metadata are retained per employee. Refresh and access tokens are AES-256-GCM encrypted with `ENCRYPTION_KEY`; token responses and secrets are never sent to the frontend. Revoked refresh tokens require reconnecting. The optional organization-wide Zoho attendance credential is separate and never proves that an employee connected.
+
 ---
 
 ## Table of Contents
