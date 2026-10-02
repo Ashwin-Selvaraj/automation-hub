@@ -3,55 +3,12 @@
 const slackService = require('./slackService');
 const standupRepo = require('../repositories/standupRepository');
 const zohoService = require('./employeeZohoService');
-
-function partsAt(date, timeZone) {
-  const values = {};
-  for (const part of new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date)) {
-    if (part.type !== 'literal') values[part.type] = Number(part.value);
-  }
-  return values;
-}
-
-function zonedDateTimeToUtc(parts, timeZone) {
-  const desired = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour || 0, parts.minute || 0, parts.second || 0);
-  let guess = desired;
-  // Two passes account for zones with daylight-saving transitions.
-  for (let i = 0; i < 2; i++) {
-    const actual = partsAt(new Date(guess), timeZone);
-    const represented = Date.UTC(
-      actual.year, actual.month - 1, actual.day,
-      actual.hour || 0, actual.minute || 0, actual.second || 0
-    );
-    guess += desired - represented;
-  }
-  return new Date(guess);
-}
+const { dayWindow } = require('../utils/timeZone');
 
 function currentDayWindow(now = new Date(), timeZone = process.env.TIMEZONE || 'Asia/Kolkata') {
   // This throws for an invalid IANA timezone, which is a server configuration
   // error and must not be reported as an employee's missing update.
-  const local = partsAt(now, timeZone);
-  const date = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
-  const start = zonedDateTimeToUtc({ ...local, hour: 0, minute: 0, second: 0 }, timeZone);
-  const nextCalendar = new Date(Date.UTC(local.year, local.month - 1, local.day + 1));
-  const end = zonedDateTimeToUtc({
-    year: nextCalendar.getUTCFullYear(),
-    month: nextCalendar.getUTCMonth() + 1,
-    day: nextCalendar.getUTCDate(),
-    hour: 0,
-    minute: 0,
-    second: 0,
-  }, timeZone);
-  return { date, start, end, timeZone };
+  return dayWindow(now, timeZone);
 }
 
 function checkoutDestination() {

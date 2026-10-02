@@ -4,6 +4,8 @@ const slackService = require('../services/slackService');
 const configService = require('../services/configService');
 const idempotency  = require('./idempotency');
 const auditLog     = require('./auditLog');
+const { localClock } = require('../utils/timeZone');
+const { toMinutes, parseWorkdays } = require('../utils/workingTime');
 
 /**
  * The only way anything in this app sends a message.
@@ -18,34 +20,6 @@ const auditLog     = require('./auditLog');
 
 const DEFAULT_TTL_HOURS = 20;
 
-/** Minutes past midnight, or null if unparseable. */
-function toMinutes(hhmm) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (h > 23 || min > 59) return null;
-  return h * 60 + min;
-}
-
-/** Current wall-clock minutes and weekday in the configured timezone. */
-function localNow(timezone) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    weekday: 'short',
-    hour12: false,
-  }).formatToParts(new Date());
-
-  const get = (t) => parts.find((p) => p.type === t)?.value;
-  const weekday = get('weekday');
-  return {
-    minutes: Number(get('hour')) * 60 + Number(get('minute')),
-    isWeekend: weekday === 'Sat' || weekday === 'Sun',
-  };
-}
-
 /**
  * Whether a person-facing message is allowed to go out right now.
  *
@@ -53,16 +27,17 @@ function localNow(timezone) {
  * are exempt — nobody is interrupted by one — as are messages the caller marks
  * urgent.
  */
-function quietHoursCheck(cfg) {
+function quietHoursCheck(cfg, now = new Date()) {
   const timezone = cfg.timezone || 'Asia/Kolkata';
   const start = toMinutes(process.env.WORK_START_TIME || '09:00');
   const end   = toMinutes(process.env.WORK_END_TIME   || '18:00');
   if (start == null || end == null) return { allowed: true };
 
-  const { minutes, isWeekend } = localNow(timezone);
+  const { minutes, weekday } = localClock(now, timezone);
 
-  if (isWeekend) {
-    return { allowed: false, reason: 'weekend' };
+  // The team's configured working days, not a fixed Saturday/Sunday weekend.
+  if (!parseWorkdays(cfg.workdays).has(weekday)) {
+    return { allowed: false, reason: 'not a working day' };
   }
   // Allow a grace hour past the end of the working day, so an 18:30 end-of-day
   // reminder against an 18:00 finish still lands.
@@ -164,4 +139,4 @@ async function postToChannel(opts) {
   return { sent: true };
 }
 
-module.exports = { sendDM, postToChannel, quietHoursCheck, _toMinutes: toMinutes };
+module.exports = { sendDM, postToChannel, quietHoursCheck };

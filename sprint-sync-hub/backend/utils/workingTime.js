@@ -13,6 +13,8 @@
  * errs toward flagging a little early rather than missing a wait.
  */
 
+const { localParts, zonedToUtcMs } = require('./timeZone');
+
 const DEFAULT_START_MINUTES = 9 * 60;
 const DEFAULT_END_MINUTES   = 18 * 60;
 const DEFAULT_WORKDAYS      = [1, 2, 3, 4, 5];
@@ -48,37 +50,6 @@ function parseWorkdays(spec) {
     }
   }
   return days.size > 0 ? days : new Set(DEFAULT_WORKDAYS);
-}
-
-/** Calendar parts of an instant as seen on a wall clock in `timeZone`. */
-function localParts(instant, timeZone) {
-  const parts = {};
-  for (const part of new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(instant)) {
-    if (part.type !== 'literal') parts[part.type] = Number(part.value);
-  }
-  return parts;
-}
-
-/**
- * The UTC instant at which the wall clock in `timeZone` reads the given local
- * date and minute-of-day. Two correction passes settle the offset in zones where
- * it changes with daylight saving, so the answer is right on the day of the
- * change as well as either side of it.
- */
-function zonedToUtcMs(year, month, day, minuteOfDay, timeZone) {
-  const desired = Date.UTC(year, month - 1, day, Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0);
-  let guess = desired;
-  for (let pass = 0; pass < 2; pass++) {
-    const a = localParts(new Date(guess), timeZone);
-    const represented = Date.UTC(a.year, a.month - 1, a.day, a.hour, a.minute, a.second);
-    guess += desired - represented;
-  }
-  return guess;
 }
 
 /**
