@@ -87,3 +87,34 @@ export const disconnectEmployeeZoho = (csrfToken) =>
   request('/api/employee/zoho/disconnect', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, body: '{}' });
 export const validateEmployeeCheckout = (csrfToken) =>
   request('/api/employee/checkout/validate', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, body: '{}' });
+
+// People — 1:1s, recognition and review evidence. Everything here is for the lead.
+export const getPeople        = () => request('/api/people');
+export const setOneOnOneSchedule = (memberId, weekday, cadence) =>
+  request(`/api/people/${memberId}/schedule`, { method: 'PATCH', body: JSON.stringify({ weekday, cadence }) });
+export const getOneOnOnePrep  = (memberId) => request(`/api/people/${memberId}/prep`);
+export const getOneOnOnes     = (memberId) => request(`/api/people/${memberId}/one-on-ones`);
+export const recordOneOnOne   = (memberId, body) =>
+  request(`/api/people/${memberId}/one-on-ones`, { method: 'POST', body: JSON.stringify(body) });
+export const setFollowUpDone  = (actionId, done) =>
+  request(`/api/people/actions/${actionId}`, { method: 'PATCH', body: JSON.stringify({ done }) });
+export const getRecognition   = (from, to) =>
+  request(`/api/people/recognition${from && to ? `?from=${from}&to=${to}` : ''}`);
+export const getEvidence      = (memberId, from, to) =>
+  request(`/api/people/${memberId}/evidence?from=${from}&to=${to}`);
+
+/** The evidence pack as a Markdown file. Not JSON, so it bypasses request(). */
+export async function downloadEvidence(memberId, from, to) {
+  const res = await fetch(`${API_BASE}/api/people/${memberId}/evidence?from=${from}&to=${to}&format=md`, {
+    credentials: 'include',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  // Cross-origin, Content-Disposition is only readable if CORS exposes it.
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] || `review-evidence-${from}-to-${to}.md`;
+  return { name, text: await res.text() };
+}

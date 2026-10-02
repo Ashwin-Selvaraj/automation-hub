@@ -234,3 +234,23 @@ test('with no token it fails clearly rather than sending an unauthenticated requ
   await assert.rejects(() => github.listOpenPullRequests('acme/api'), (err) => err.code === 'GITHUB_NOT_CONFIGURED');
   assert.equal(calls.length, 0);
 });
+
+test('recently closed pull requests stop paging once they reach back past the window', async () => {
+  reset();
+  const page = (n) => Array.from({ length: 100 }, (_, i) => ({
+    number: n * 100 + i,
+    // Page 1 is all inside the window; page 2 crosses its start; page 3 must never be read.
+    updated_at: n === 1 ? '2026-09-15T10:00:00Z' : i < 50 ? '2026-09-11T10:00:00Z' : '2026-09-01T10:00:00Z',
+  }));
+  responder = async (_url, opts) => ({
+    data: page(opts.params.page),
+    headers: { link: '<https://api.github.com/x?page=next>; rel="next"' },
+  });
+
+  const out = await github.listClosedPullRequestsSince('acme/api', '2026-09-10T00:00:00Z');
+  assert.equal(calls.length, 2, 'stops after the page that crosses the window');
+  assert.equal(out.length, 150, 'keeps only the ones updated inside it');
+  assert.equal(calls[0].opts.params.state, 'closed');
+  assert.equal(calls[0].opts.params.sort, 'updated');
+  assert.equal(calls[0].opts.params.direction, 'desc');
+});
