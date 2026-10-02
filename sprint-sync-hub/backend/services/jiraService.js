@@ -47,6 +47,127 @@ function jiraError(err, context) {
   return new Error(`Jira ${context}: ${err.message}`);
 }
 
+// ─── Project issue listing (for the task sync) ───────────────────────────────
+
+// Jira project keys start with a letter and contain letters, digits and
+// underscores. Validated because the key is interpolated into JQL.
+const PROJECT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,49}$/;
+const SPRINT_FIELD_RE = /^customfield_\d+$/;
+
+// The id of the "Sprint" custom field differs between Jira instances. 10020 is
+// the value createIssue() already assumes; set JIRA_SPRINT_FIELD to override.
+const DEFAULT_SPRINT_FIELD = 'customfield_10020';
+const DONE_NAMES = new Set(['done', 'closed', 'resolved', 'complete', 'completed']);
+
+function sprintFieldId() {
+  const configured = process.env.JIRA_SPRINT_FIELD;
+  return configured && SPRINT_FIELD_RE.test(configured) ? configured : DEFAULT_SPRINT_FIELD;
+}
+
+/**
+ * Parses a Jira timestamp into an ISO string, or null.
+ *
+ * Jira writes offsets without a colon ("2026-08-23T11:31:42.000+0000"), which
+ * the ECMAScript date grammar does not define; engines vary in whether they
+ * accept it. The colon is inserted first so the result never depends on that.
+ */
+function parseJiraTimestamp(value) {
+  if (!value) return null;
+  const normalised = String(value).replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  const t = new Date(normalised);
+  return Number.isNaN(t.getTime()) ? null : t.toISOString();
+}
+
+/**
+ * Reduces a raw Jira issue to the fields the task sync uses.
+ *
+ * Completion comes from the status CATEGORY ("done"), not the status name: names
+ * are per-workflow ("Resolved", "Shipped", "Released"), the category is not. The
+ * name list is only a fallback for an issue that arrives without a category.
+ *
+ * `sprintFieldPresent` separates "this instance has no such field, or it was not
+ * returned" (key absent) from "the issue is simply in no sprint" (key present,
+ * null). The first means JIRA_SPRINT_FIELD is wrong; the second is a backlog item.
+ */
+function normalizeIssue(issue, sprintField = DEFAULT_SPRINT_FIELD) {
+  const f = issue.fields || {};
+  const category = f.status?.statusCategory?.key || null;
+  const statusName = f.status?.name || 'Unknown';
+
+  const sprintFieldPresent = Object.prototype.hasOwnProperty.call(f, sprintField);
+  const rawSprints = Array.isArray(f[sprintField]) ? f[sprintField] : [];
+  // Cloud returns sprint objects. Older Server returns encoded strings, which are
+  // not parsed here: an issue in one is treated as having no usable sprint info.
+  const sprints = rawSprints
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => ({ id: x.id, name: x.name, state: String(x.state || '').toLowerCase() }));
+
+  return {
+    key: issue.key,
+    summary: f.summary || '',
+    status: statusName,
+    statusCategory: category,
+    isDone: category ? category === 'done' : DONE_NAMES.has(statusName.toLowerCase()),
+    assigneeAccountId: f.assignee?.accountId || null,
+    assigneeEmail: f.assignee?.emailAddress || null,
+    assigneeName: f.assignee?.displayName || null,
+    duedate: f.duedate || null,
+    priority: f.priority?.name || null,
+    issueType: f.issuetype?.name || null,
+    created: parseJiraTimestamp(f.created),
+    updated: parseJiraTimestamp(f.updated),
+    resolved: parseJiraTimestamp(f.resolutiondate),
+    sprintFieldPresent,
+    sprints,
+  };
+}
+
+/**
+ * Every issue in a project updated within the last `sinceDays` days, paginated.
+ *
+ * Uses /search/jql, which pages with a `nextPageToken` rather than an offset.
+ * Reports `truncated` when it stops at `maxPages` so a caller never mistakes a
+ * partial read for a complete one.
+ *
+ * @returns {Promise<{ issues: Array, truncated: boolean, sprintField: string }>}
+ */
+async function listProjectIssues(projectKey, { sinceDays = 120, maxPages = 40 } = {}) {
+  if (!PROJECT_KEY_RE.test(String(projectKey || ''))) {
+    throw new Error(`Jira listProjectIssues: "${projectKey}" is not a valid project key`);
+  }
+  // Zero, negative or unparseable is a misconfiguration; falling back to the
+  // default is safer than quietly syncing a day of history.
+  const requested = Math.floor(Number(sinceDays));
+  const days = Number.isFinite(requested) && requested > 0 ? Math.min(730, requested) : 120;
+  const sprintField = sprintFieldId();
+  const jql = `project = "${projectKey}" AND updated >= -${days}d ORDER BY updated DESC`;
+  const fields = [
+    'summary', 'status', 'assignee', 'duedate', 'priority', 'issuetype',
+    'created', 'updated', 'resolutiondate', sprintField,
+  ].join(',');
+
+  try {
+    const client = getClient();
+    const issues = [];
+    let nextPageToken;
+
+    for (let page = 0; page < maxPages; page++) {
+      const res = await client.get('/search/jql', {
+        params: { jql, maxResults: 100, fields, ...(nextPageToken ? { nextPageToken } : {}) },
+      });
+      for (const raw of res.data.issues || []) issues.push(normalizeIssue(raw, sprintField));
+
+      nextPageToken = res.data.nextPageToken;
+      if (!nextPageToken || res.data.isLast === true) {
+        return { issues, truncated: false, sprintField };
+      }
+    }
+    return { issues, truncated: true, sprintField };
+  } catch (err) {
+    throw jiraError(err, 'listProjectIssues');
+  }
+}
+
 /**
  * Fetches issues in a project that were updated within the sprint date range.
  * Uses /search/jql (the current Jira Cloud endpoint — /search is deprecated).
@@ -450,6 +571,8 @@ async function fetchAndStoreJiraAccountIds(organisationId) {
 
 module.exports = {
   getSprintIssues, addComment, transitionIssue, getOverdueIssues, testConnection,
+  // Reading a whole project (feeds the task sync)
+  listProjectIssues, normalizeIssue, parseJiraTimestamp,
   // Write APIs
   getJiraBoardId, getMemberJiraAccountId, createSprint, startSprint, createIssue, createIssuesBatch,
   // Team sync

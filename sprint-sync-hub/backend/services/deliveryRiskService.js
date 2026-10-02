@@ -2,6 +2,8 @@
 
 const deliveryRepo = require('../repositories/deliveryRepository');
 const sprintRepo   = require('../repositories/sprintRepository');
+const configService = require('./configService');
+const { dateOnlyString, todayInZone } = require('../utils/dateOnly');
 
 /**
  * Delivery risk: will this sprint land, who is holding too much at once, and
@@ -53,12 +55,10 @@ function round1(n) {
   return Math.round(n * 10) / 10;
 }
 
-/** YYYY-MM-DD, whether the input arrived as a Date or a string. */
+/** YYYY-MM-DD for a DATE column value, whatever zone the server runs in. */
 function isoDate(value) {
-  if (value == null) return null;
-  return value instanceof Date
-    ? toDate(value).toISOString().substring(0, 10)
-    : String(value).substring(0, 10);
+  // DATE columns arrive as local-midnight Dates; see utils/dateOnly.
+  return dateOnlyString(value);
 }
 
 /**
@@ -117,9 +117,9 @@ function forecast({ open, done, unassigned, completionsByDay, startDate, endDate
     };
   }
 
-  const unassignedNote = unassigned > 0
-    ? ` ${unassigned} of the open ${unassigned === 1 ? 'task has' : 'tasks have'} no assignee.`
-    : '';
+  const unassignedNote = unassigned === 0 ? ''
+    : unassigned === 1 ? ' 1 open task has no assignee.'
+    : ` ${unassigned} of the open tasks have no assignee.`;
 
   return {
     ...base,
@@ -148,11 +148,18 @@ async function assess(organisationId, { wipLimit = DEFAULT_WIP_LIMIT } = {}) {
   const sprint = await sprintRepo.getActiveSprint(organisationId);
   if (!sprint) return null;
 
+  // Sprint dates are DATE columns and "today" is the team's today, not UTC's.
+  // Both are turned into plain YYYY-MM-DD strings here, once, so no day count
+  // below depends on the zone the server happens to run in.
+  const startDate = dateOnlyString(sprint.start_date);
+  const endDate   = dateOnlyString(sprint.end_date);
+  const today     = todayInZone(configService.getSprintConfig().timezone);
+
   const [counts, byDay, perMember, added] = await Promise.all([
     deliveryRepo.openAndDone(organisationId, sprint.id),
     deliveryRepo.completionsByDay(organisationId, sprint.id),
     deliveryRepo.openWorkPerMember(organisationId, sprint.id),
-    deliveryRepo.addedAfterStart(organisationId, sprint.id, sprint.start_date),
+    deliveryRepo.addedAfterStart(organisationId, sprint.id, startDate),
   ]);
 
   const projection = forecast({
@@ -160,8 +167,9 @@ async function assess(organisationId, { wipLimit = DEFAULT_WIP_LIMIT } = {}) {
     done:  counts.done,
     unassigned: counts.unassigned,
     completionsByDay: byDay,
-    startDate: sprint.start_date,
-    endDate:   sprint.end_date,
+    startDate,
+    endDate,
+    today,
   });
 
   const scopeAdded = added.map((t) => ({
@@ -175,7 +183,7 @@ async function assess(organisationId, { wipLimit = DEFAULT_WIP_LIMIT } = {}) {
   }));
 
   return {
-    sprint:     { id: sprint.id, name: sprint.name, startDate: isoDate(sprint.start_date), endDate: isoDate(sprint.end_date) },
+    sprint:     { id: sprint.id, name: sprint.name, startDate, endDate },
     forecast:   projection,
     wip:        wipBreaches(perMember, wipLimit),
     wipLimit,

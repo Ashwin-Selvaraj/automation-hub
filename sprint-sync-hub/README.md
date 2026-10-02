@@ -15,6 +15,13 @@ Sprint-Sync Hub is an AI-powered automation system that connects your team's Sla
 - **Role-based DM gating** — managerial-only members are exempt from all automated task/standup DMs (huddle-sync no-match, EOD reminders, deadline alerts, checkout nudges, mismatch alerts).
 - **Weekly sprint report** — Claude generates a summary (with leaderboard + at-risk members) and posts it to the channel and/or DMs the manager, on a configurable day/time.
 
+### Jira Task Sync
+- **Keeps the task list in step with Jira, hourly** — status, assignee, due date, issue type, and when each task was *really* finished (Jira's own resolution date, not the moment this system first noticed). Until this existed, the task list held only work created through the in-app sprint planner, so the overdue, stalled, forecast, WIP and scope-creep sections of the daily brief — and the standup matcher's idea of which tasks are yours — silently ignored everything else.
+- **Completion follows the status *category*, not its name**, so a custom workflow ("Shipped", "Released") counts as done.
+- **Only the active Jira sprint attaches to the active sprint here.** Backlog, closed and future sprints leave a task's attachment alone.
+- **Loud about gaps.** A wrong sprint field, a read cut short, no active sprint, or most issues assigned to unlinked people is written to the activity log rather than left to show up later as a quietly incomplete brief.
+- **Past-due digest.** Tasks past their due date reach their owner as one message a day listing them, each task at most once a week. There is no second "critical" message and no one is escalated to; the lead sees all overdue work in the daily brief.
+
 ### AI-Assisted Sprint Planning & Task Assignment
 - **Sprint goal breakdown** — paste a sprint goal, Claude breaks it into individual Jira-ready tasks.
 - **Smart task assignment** — ranks team members per task using skill profile match, current workload, and past performance; creates the sprint and issues directly in Jira with assignees pre-filled.

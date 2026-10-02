@@ -46,6 +46,7 @@ Zoho `location`, `accounts-server`, and `api_domain` metadata are retained per e
 6. [API Endpoints Reference](#api-endpoints-reference)
 7. [Common Errors & Fixes](#common-errors--fixes)
 8. [GitHub Integration](#github-integration)
+9. [Jira Task Sync](#jira-task-sync)
 
 ---
 
@@ -481,3 +482,40 @@ Set a member's GitHub username on the **Team** tab, or `PATCH /api/members/:memb
 | `GitHub 401 … token is invalid or expired` | Expired or revoked token | Create a new fine-grained token. |
 | `rate limit reached` | Too many reads | Raise `GITHUB_CACHE_SECONDS`. |
 | The brief shows "Review waits are incomplete" | One or more repositories could not be read | The warning names them; the rest of the brief is unaffected. |
+
+---
+
+## Jira Task Sync
+
+The `jira-task-sync` automation reads every issue in `JIRA_PROJECT_KEY` updated in the last `JIRA_SYNC_LOOKBACK_DAYS` days and writes it to the `tasks` table, hourly at :05. It reads from Jira and writes only to this application's database.
+
+| Variable | Default | Description |
+|---|---|---|
+| `JIRA_SYNC_LOOKBACK_DAYS` | `120` | Days of history read (max 730). |
+| `JIRA_SPRINT_FIELD` | `customfield_10020` | The Sprint custom field's id on your instance. |
+
+### What it decides
+
+- **Done** comes from the status *category* (`statusCategory.key === "done"`); status names are per-workflow. The name list (`done`, `closed`, `resolved`…) is only a fallback for an issue that arrives with no category.
+- **When it was finished** is Jira's `resolutiondate`. A task finished months ago and first seen today is dated when it was finished. A reopened task has its completion cleared.
+- **Assignee and due date** are overwritten from Jira, including with *nothing* when Jira has cleared them. People are matched by Jira account id, then by email; assignees who are not linked to a team member are left unassigned and counted.
+- **Sprint:** an issue in the *active* Jira sprint is attached to the active sprint here. An issue in no sprint, or only closed or future ones, keeps whatever attachment it already had.
+- **"No movement"** in the brief uses Jira's own `updated` time (comments, edits and status changes all move it).
+
+### What it says when something is wrong
+
+Written to the activity log as a failure (once a day per distinct problem, not every hour), and returned in the run summary:
+
+| Message | Meaning | Fix |
+|---|---|---|
+| `None of the N issues carried the sprint field …` | `JIRA_SPRINT_FIELD` is wrong for this instance | Set it to your Sprint field id. |
+| `Jira returned more issues than the sync reads in one run` | The read stopped at its page cap | Lower `JIRA_SYNC_LOOKBACK_DAYS`. |
+| `There is no active sprint in the database` | Nothing could be attached to a sprint | Create or activate a sprint. |
+| `N of M issues are assigned to people who are not linked` | Jira IDs are missing on the Team tab | Run the member sync, or set IDs by hand. |
+
+### Limits worth knowing
+
+- An issue **deleted** in Jira stays in the table as it was last seen; deletion is not detected.
+- "Added after the sprint started" is judged from an issue's *creation* date. An old backlog item pulled into the sprint mid-sprint is not seen as scope added.
+- The sprint field is read from Jira Cloud's object form. Older Jira Server instances encode sprints as strings, which are not parsed.
+- This was verified against real Jira payload shapes and a scratch database, **not against your own Jira instance**. Check the first run's summary.
