@@ -32,6 +32,14 @@ Sprint-Sync Hub is an AI-powered automation system that connects your team's Sla
 - **Feature flag toggle** — Zoho attendance can be turned on/off from Settings without a redeploy; all attendance-dependent cron logic checks this flag.
 - **Attendance history** — per-member and team-wide attendance history views.
 
+### GitHub Review Waits
+- **Who a pull request is waiting on, and for how long** — read-only. Each requested reviewer is dated from their own review request (a reviewer added weeks after the PR opened is not blamed for the first reviewer's wait), and a draft that was marked ready starts its clock then.
+- **Measured in working hours**, in your timezone, so a PR opened on Friday evening is not "overdue" by Saturday. Past the SLA (`GITHUB_REVIEW_SLA_HOURS`, default 24) it appears in the daily brief.
+- **Parked work is counted, not listed.** A wait of more than `GITHUB_REVIEW_STALE_DAYS` (default 10) working days is almost certainly abandoned, so it is summarised in one line rather than burying PRs that are actually blocking someone.
+- **Left out on purpose:** drafts, bot-authored pull requests, bot reviewers, and anything with an ignored label.
+- **Optional review digest** (off by default): one message a day to each person who owes reviews past the SLA — a single digest per person, never one message per pull request, and nothing for parked work.
+- Link each person's GitHub username on the **Team** tab. GitHub does not reliably expose an email address, so this cannot be matched automatically.
+
 ### Roles & Member Management
 - **Role management** — create/edit/delete roles, distinguish technical vs. managerial roles; managerial-only members are excluded from automated task DMs.
 - **Member ↔ role assignment** — assign/remove one or more roles per member.

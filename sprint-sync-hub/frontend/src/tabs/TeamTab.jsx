@@ -3,7 +3,7 @@ import { theme, styles } from '../theme.js';
 import {
   getMembers, getRoles, updateMemberRoles,
   syncAll, fetchSlackEmails, fetchJiraIds,
-  setMemberJiraId, postTeamMembers,
+  setMemberJiraId, setMemberGithubLogin, postTeamMembers,
 } from '../api.js';
 import Card from '../components/Card.jsx';
 import Button from '../components/Button.jsx';
@@ -176,10 +176,81 @@ function JiraIdCell({ member, onSaved }) {
   );
 }
 
+// ─── GitHub login cell ────────────────────────────────────────────────────────
+// Unlike the Jira ID this stays editable once set: GitHub usernames are typed by
+// hand, so people need to be able to correct or clear a mistake.
+
+function GithubLoginCell({ member, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [value,   setValue]   = useState('');
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState('');
+
+  function startEdit() {
+    setValue(member.githubLogin || '');
+    setError('');
+    setEditing(true);
+  }
+
+  async function handleSave() {
+    setSaving(true); setError('');
+    try {
+      const res = await setMemberGithubLogin(member.id, value.trim());
+      setEditing(false);
+      onSaved(member.id, res.member?.github_login ?? null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <input
+            autoFocus
+            aria-label={`GitHub username for ${member.name}`}
+            value={value}
+            onChange={(e) => { setValue(e.target.value); setError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setEditing(false); }}
+            placeholder="github username"
+            style={{
+              padding: '3px 6px', border: `1px solid ${colors.gray300}`, borderRadius: 4,
+              fontSize: 11, fontFamily: fonts.mono, width: 140, outline: 'none',
+            }}
+          />
+          <Button variant="primary" size="sm" onClick={handleSave} disabled={saving}>
+            {saving ? '…' : 'Save'}
+          </Button>
+          <button onClick={() => setEditing(false)} aria-label="Cancel" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: colors.gray400 }}>✕</button>
+        </div>
+        {error && <span style={{ fontSize: 11, color: colors.red600 }}>{error}</span>}
+        <span style={{ fontSize: 10, color: colors.gray400 }}>The name after github.com/ · leave empty to unlink</span>
+      </div>
+    );
+  }
+
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {member.githubLogin
+        ? <span style={{ fontFamily: fonts.mono, fontSize: 12, color: colors.gray600 }}>@{member.githubLogin}</span>
+        : <span style={{ fontSize: 12, color: colors.gray300 }}>—</span>}
+      <button
+        onClick={startEdit}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: colors.blue600, textDecoration: 'underline', padding: 0 }}
+      >
+        {member.githubLogin ? 'Edit' : 'Link'}
+      </button>
+    </span>
+  );
+}
+
 // ─── Member Row ───────────────────────────────────────────────────────────────
 
 const MemberRow = React.memo(function MemberRow({
-  member, allRoles, pendingChange, onRoleChange, onJiraIdSaved, isLast,
+  member, allRoles, pendingChange, onRoleChange, onJiraIdSaved, onGithubLoginSaved, isLast,
 }) {
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
 
@@ -285,6 +356,11 @@ const MemberRow = React.memo(function MemberRow({
           member={member}
           onSaved={onJiraIdSaved}
         />
+      </td>
+
+      {/* GitHub */}
+      <td style={{ padding: '10px 12px', verticalAlign: 'middle', minWidth: 150 }}>
+        <GithubLoginCell member={member} onSaved={onGithubLoginSaved} />
       </td>
 
       {/* Status */}
@@ -474,6 +550,10 @@ export default function TeamTab() {
   }
 
   // ─── Jira ID inline saved ───────────────────────────────────────────────────
+  function handleGithubLoginSaved(memberId, githubLogin) {
+    setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, githubLogin } : m)));
+  }
+
   function handleJiraIdSaved(memberId, jiraAccountId, source) {
     setMembers((prev) =>
       prev.map((m) =>
@@ -551,10 +631,10 @@ export default function TeamTab() {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${colors.gray200}` }}>
-                  {['Member', 'Roles', 'Email', 'Jira ID', 'Status'].map((h) => (
+                  {['Member', 'Roles', 'Email', 'Jira ID', 'GitHub', 'Status'].map((h) => (
                     <th key={h} style={{
                       fontSize: 11, fontWeight: 600, color: colors.gray600,
                       textTransform: 'uppercase', letterSpacing: '0.05em',
@@ -574,6 +654,7 @@ export default function TeamTab() {
                     pendingChange={pendingChanges[m.id] || null}
                     onRoleChange={handleRoleChange}
                     onJiraIdSaved={handleJiraIdSaved}
+                    onGithubLoginSaved={handleGithubLoginSaved}
                     isLast={i === members.length - 1}
                   />
                 ))}

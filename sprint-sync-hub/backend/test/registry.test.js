@@ -79,13 +79,23 @@ test('nothing that messages the team ships enabled by default', () => {
   registry.load();
   for (const key of registry.keys()) {
     const mod = require(resolveModule(key));
-    if (mod.audience === 'member' && mod.defaultEnabled !== false) {
+    // Anything that messages an individual — about their own tasks or about
+    // reviews they owe — has to be switched on by someone, not shipped on.
+    const messagesAnIndividual = mod.audience === 'member' || mod.audience === 'reviewer';
+    if (messagesAnIndividual && mod.defaultEnabled !== false) {
       assert.equal(
         key, 'deadline-check',
         `${key} messages individuals and defaults to on — only the overdue alert is meant to`
       );
     }
   }
+});
+
+test('the review digest is opt-in, and the lead sees the same waits in the brief before enabling it', () => {
+  registry.load();
+  const nudge = require(resolveModule('pr-review-nudge'));
+  assert.equal(nudge.defaultEnabled, false);
+  assert.equal(nudge.audience, 'reviewer');
 });
 
 test('person-facing automations declare a human audience', () => {

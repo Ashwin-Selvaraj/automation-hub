@@ -43,6 +43,8 @@ const BRIEF_SECTIONS = [
   { key: 'offPlan',    label: 'Off-plan',    tone: 'watch'  },
   { key: 'wip',        label: 'Overloaded',  tone: 'watch'  },
   { key: 'scopeAdded', label: 'Added late',  tone: 'watch'  },
+  { key: 'reviewWaiting',    label: 'Awaiting review', tone: 'watch' },
+  { key: 'reviewUnassigned', label: 'No reviewer',     tone: 'watch' },
 ];
 
 // Delivery forecast states. "Too early" is deliberately styled as neutral —

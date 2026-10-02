@@ -111,3 +111,161 @@ test('long lists are truncated rather than filling the message', () => {
   assert.match(out, /and 4 more/);
   assert.ok(!out.includes('QG-11'), 'items past the cap are summarised, not listed');
 });
+
+
+// ─── Pull requests waiting on review ─────────────────────────────────────────
+
+const REVIEW = {
+  reviewsConfigured: true,
+  reviewSlaHours: 24,
+  reviewStaleDays: 10,
+  reviewParked: 0,
+  reviewErrors: [],
+  reviewsPending: false,
+  reviewsStale: false,
+  reviewWaiting: [
+    { repo: 'acme/api', number: 214, title: 'Add rate limiting', url: 'https://github.com/acme/api/pull/214', author: 'alice', who: 'Bob', waitingHours: 31, kind: 'reviewer' },
+    { repo: 'acme/web', number: 90,  title: 'Fix login redirect', url: 'https://github.com/acme/web/pull/90', author: 'carol', who: 'team backend', waitingHours: 26, kind: 'team' },
+  ],
+  reviewUnassigned: [
+    { repo: 'acme/api', number: 219, title: 'Retry failed webhooks', url: 'https://github.com/acme/api/pull/219', author: 'dave', who: null, waitingHours: 40, kind: 'unassigned' },
+  ],
+};
+
+test('the brief says who each pull request is waiting on, and for how long, as links', () => {
+  const out = briefService.render({ ...FULL, ...REVIEW });
+
+  assert.match(out, /\*🔍 Waiting on review — 3\*/);
+  assert.ok(out.includes('<https://github.com/acme/api/pull/214|acme/api#214 Add rate limiting>'), 'a real Slack link');
+  assert.match(out, /waiting on \*Bob\* for 31 working hours/);
+  assert.match(out, /waiting on \*team backend\* for 26 working hours/);
+  assert.match(out, /nobody asked to review it yet, 40 working hours/);
+  assert.match(out, /Past the 24 working-hour mark/);
+  assert.ok(!out.includes('undefined'));
+});
+
+test('a pull request title cannot mention people or forge a link in the brief', () => {
+  const hostile = {
+    ...REVIEW,
+    reviewWaiting: [{
+      ...REVIEW.reviewWaiting[0],
+      title: '<!channel> urgent <@U123> <https://evil.example|your bank>',
+      who: '<!here>',
+    }],
+    reviewUnassigned: [],
+  };
+  const out = briefService.render({ ...EMPTY, ...hostile });
+
+  assert.ok(!out.includes('<!channel>'), 'no channel mention');
+  assert.ok(!out.includes('<@U123>'), 'no user mention');
+  assert.ok(!out.includes('<!here>'), 'no here mention');
+  assert.ok(!out.includes('<https://evil.example'), 'no forged link');
+  assert.ok(out.includes('&lt;!channel&gt;'), 'shown as plain text instead');
+});
+
+test('long-parked pull requests are counted in one line, not listed', () => {
+  const out = briefService.render({ ...EMPTY, ...REVIEW, reviewWaiting: [], reviewUnassigned: [], reviewParked: 26 });
+
+  assert.match(out, /26 more have been waiting over 10 working days — likely parked, so not listed/);
+  assert.ok(!out.includes('acme/api#'), 'none are listed individually');
+});
+
+test('a single parked pull request reads grammatically', () => {
+  const out = briefService.render({ ...EMPTY, ...REVIEW, reviewWaiting: [], reviewUnassigned: [], reviewParked: 1 });
+  assert.match(out, /1 more has been waiting/);
+});
+
+test('a repository that could not be read is called out, not silently left empty', () => {
+  const out = briefService.render({
+    ...EMPTY, ...REVIEW, reviewWaiting: [], reviewUnassigned: [],
+    reviewErrors: [
+      { repo: 'acme/secret', error: 'GitHub 404: Not Found — the repository does not exist or the token cannot access it', code: 'GITHUB_NOT_FOUND' },
+      { repo: 'acme/api', error: 'GitHub 500', skippedPullRequests: 2 },
+    ],
+  });
+
+  assert.match(out, /Review waits are incomplete/);
+  assert.match(out, /acme\/secret \(GitHub 404/);
+  assert.match(out, /acme\/api \(2 pull requests couldn't be read\)/);
+  assert.ok(!out.includes('Nothing needs your attention'), 'an incomplete picture is not "all clear"');
+});
+
+test('data still loading is said to be loading, not reported as empty', () => {
+  const out = briefService.render({ ...EMPTY, ...REVIEW, reviewWaiting: [], reviewUnassigned: [], reviewsPending: true });
+  assert.match(out, /still loading from GitHub/);
+});
+
+test('with GitHub not configured the brief has no review section at all', () => {
+  const out = briefService.render({ ...FULL, reviewsConfigured: false, reviewWaiting: [], reviewUnassigned: [] });
+  assert.ok(!out.includes('Waiting on review'));
+  assert.ok(!out.includes('GitHub'));
+});
+
+test('a long list of waiting pull requests is capped', () => {
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    ...REVIEW.reviewWaiting[0], number: 300 + i, who: 'Bob', waitingHours: 50 - i,
+  }));
+  const out = briefService.render({ ...EMPTY, ...REVIEW, reviewWaiting: many, reviewUnassigned: [] });
+  assert.match(out, /and 4 more/);
+  assert.ok(out.includes('#307'), 'the eighth is shown');
+  assert.ok(!out.includes('#308'), 'the ninth is not');
+});
+
+test('the review section never reads as an instruction to chase anyone', () => {
+  const out = briefService.render({ ...FULL, ...REVIEW, reviewParked: 3 }).toLowerCase();
+  for (const word of ['chase', 'warn', 'remind them', 'follow up with', 'discipline', 'overdue review', 'slow']) {
+    assert.ok(!out.includes(word), `the brief must not contain "${word}"`);
+  }
+});
+
+// ─── summariseReviews: what is shown, and what is only counted ───────────────
+
+const entry = (over) => ({
+  kind: 'reviewer', repo: 'acme/api', number: 1, title: 'T', url: 'https://github.com/acme/api/pull/1',
+  author: 'alice', reviewer: 'bob', member: null, waitingHours: 30, overSla: true, stale: false, ...over,
+});
+
+test('only over-SLA, non-parked waits are listed; parked ones are counted', () => {
+  const out = briefService.summariseReviews({
+    configured: true, slaHours: 24, staleDays: 10, errors: [],
+    waiting: [
+      entry({ number: 1, waitingHours: 30 }),                          // listed
+      entry({ number: 2, waitingHours: 5, overSla: false }),           // within SLA
+      entry({ number: 3, waitingHours: 500, stale: true }),            // parked
+    ],
+    unassigned: [entry({ kind: 'unassigned', number: 4, overSla: true, stale: true })],
+  });
+
+  assert.deepEqual(out.reviewWaiting.map((e) => e.number), [1]);
+  assert.equal(out.reviewParked, 2, 'one parked wait and one parked unassigned');
+  assert.equal(out.reviewsConfigured, true);
+});
+
+test('a reviewer is named as the member, else the team, else the login', () => {
+  const out = briefService.summariseReviews({
+    configured: true, slaHours: 24, staleDays: 10, errors: [], unassigned: [],
+    waiting: [
+      entry({ number: 1, member: { name: 'Bob Stone' } }),
+      entry({ number: 2, kind: 'team', team: 'backend', reviewer: undefined }),
+      entry({ number: 3, reviewer: 'stranger' }),
+    ],
+  });
+  assert.deepEqual(out.reviewWaiting.map((e) => e.who), ['Bob Stone', 'team backend', '@stranger']);
+});
+
+test('an unconfigured or missing assessment yields the same keys, all empty', () => {
+  for (const input of [null, undefined, { configured: false }]) {
+    const out = briefService.summariseReviews(input);
+    assert.equal(out.reviewsConfigured, false);
+    assert.deepEqual(out.reviewWaiting, []);
+    assert.deepEqual(out.reviewUnassigned, []);
+    assert.equal(out.reviewParked, 0);
+  }
+});
+
+test('a pending or stale assessment is flagged so the brief can say so', () => {
+  const pending = briefService.summariseReviews({ configured: true, pending: true, waiting: [], unassigned: [], errors: [] });
+  assert.equal(pending.reviewsPending, true);
+  const stale = briefService.summariseReviews({ configured: true, stale: true, waiting: [], unassigned: [], errors: [] });
+  assert.equal(stale.reviewsStale, true);
+});
