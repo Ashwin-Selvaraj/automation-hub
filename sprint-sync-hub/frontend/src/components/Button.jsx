@@ -64,6 +64,7 @@ export default function Button({
   return (
     <button
       type={type}
+      disabled={disabled}
       onClick={disabled ? undefined : onClick}
       onMouseEnter={() => !disabled && setHovered(true)}
       onMouseLeave={() => setHovered(false)}

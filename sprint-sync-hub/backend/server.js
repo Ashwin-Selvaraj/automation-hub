@@ -22,6 +22,7 @@ const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http:
   .filter(Boolean);
 
 app.use(cors({
+  credentials: true,
   origin(origin, cb) {
     // No Origin header: same-origin, curl, or a server-to-server call like the
     // Zoho webhook. CORS is not what protects those — the API key and the
@@ -54,6 +55,12 @@ app.get('/api/health', (req, res) => {
 });
 app.use('/api/webhooks', require('./routes/webhooks'));
 
+// Employee authentication is cookie-based and deliberately separate from the
+// shared administrator API key used by the rest of this dashboard.
+app.use('/api/auth/slack', require('./routes/employeeAuth'));
+app.use('/api/employee/zoho', require('./routes/employeeZoho'));
+app.use('/api/employee/checkout', require('./routes/employeeCheckout'));
+
 const { requireApiKey } = require('./middleware/auth');
 app.use('/api', requireApiKey);
 
@@ -72,7 +79,6 @@ app.use('/api/sprint-planning', require('./routes/sprintPlanning'));
 app.use('/api/mismatch',      require('./routes/mismatch'));
 app.use('/api/roles',         require('./routes/roles'));
 app.use('/api/members',       require('./routes/members'));
-app.use('/api/zoho/oauth',   require('./routes/zohoOAuth'));
 
 // Diagnostic routes — only available in non-production environments
 if (process.env.NODE_ENV !== 'production') {
@@ -95,6 +101,9 @@ async function boot() {
 
   // 2. Run migrations (includes app_config table)
   await runMigrations();
+  await require('./repositories/employeeAuthRepository').deleteExpired().catch((err) => {
+    console.warn('[boot] Employee session cleanup failed (non-fatal):', err.message);
+  });
 
   // 3. Seed config from env → DB on first boot; subsequent boots load from DB
   await configService.seedFromEnv();

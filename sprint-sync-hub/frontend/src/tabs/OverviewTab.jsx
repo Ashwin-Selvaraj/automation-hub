@@ -6,6 +6,7 @@ import Card, { SectionHeader } from '../components/Card.jsx';
 import Badge from '../components/Badge.jsx';
 import Toggle from '../components/Toggle.jsx';
 import Spinner from '../components/Spinner.jsx';
+import CheckoutCard from '../components/CheckoutCard.jsx';
 
 const { colors, fonts } = theme;
 
@@ -693,6 +694,8 @@ export default function OverviewTab({ config, navigate }) {
       {/* The same brief that gets DM'd each morning — first thing on the page,
           because it is the thing worth reading first. */}
       <BriefCard />
+
+      <CheckoutCard />
 
       {/* ── Needs Your Attention (mismatch alerts) ── */}
       {mismatchData && mismatchData.events && mismatchData.events.filter((e) => !e.resolved).length > 0 && (

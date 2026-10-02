@@ -47,60 +47,6 @@ const SECTIONS = [
   },
 ];
 
-// ─── Zoho OAuth reconnect ─────────────────────────────────────────────────────
-
-function ZohoReconnectButton() {
-  const [loading, setLoading] = useState(false);
-
-  async function handleConnect() {
-    setLoading(true);
-    try {
-      const r    = await fetch(`${API_BASE}/api/zoho/oauth/url`, { headers: apiHeaders() });
-      const body = await r.json();
-      if (body.authUrl) {
-        window.location.href = body.authUrl;
-      } else {
-        alert('Could not get Zoho auth URL: ' + (body.error || 'Unknown error'));
-      }
-    } catch (e) {
-      alert('Backend error: ' + e.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div style={{
-      marginTop: 20, padding: '16px 20px',
-      background: '#EFF6FF', border: '1px solid #BFDBFE',
-      borderRadius: 10, display: 'flex', alignItems: 'center',
-      justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
-    }}>
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: '#1D4ED8', fontFamily: 'inherit', marginBottom: 3 }}>
-          Zoho People — Attendance Scope
-        </div>
-        <div style={{ fontSize: 12, color: '#3B82F6', fontFamily: 'inherit', lineHeight: 1.5 }}>
-          Click to authorize attendance access (ZOHOPEOPLE.attendance.READ).
-          This opens Zoho login — after you accept, you'll be redirected back automatically.
-        </div>
-      </div>
-      <button
-        onClick={handleConnect}
-        disabled={loading}
-        style={{
-          padding: '9px 20px', background: loading ? '#93C5FD' : '#2563EB',
-          color: '#fff', border: 'none', borderRadius: 8,
-          fontWeight: 600, fontSize: 13, cursor: loading ? 'not-allowed' : 'pointer',
-          whiteSpace: 'nowrap', flexShrink: 0,
-        }}
-      >
-        {loading ? 'Opening…' : '🔗 Connect Zoho Attendance'}
-      </button>
-    </div>
-  );
-}
-
 function ZohoAttendanceToggle() {
   const [enabled, setEnabled] = useState(null);
   const [saving,  setSaving]  = useState(false);
@@ -339,9 +285,6 @@ export default function ConnectionsTab() {
               ))}
             </div>
           )}
-
-          {/* Zoho OAuth reconnect button */}
-          <ZohoReconnectButton />
         </div>
       )}
 

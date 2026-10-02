@@ -43,6 +43,20 @@ async function findById(memberId) {
   }
 }
 
+async function findBySlackUserId(organisationId, slackUserId) {
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM members
+        WHERE organisation_id = $1 AND slack_user_id = $2 AND is_active = true`,
+      [organisationId, slackUserId]
+    );
+    return rows[0] || null;
+  } catch (err) {
+    console.error('[memberRepository.findBySlackUserId]', err.message);
+    throw err;
+  }
+}
+
 /**
  * Update email for a member.
  */
@@ -93,6 +107,7 @@ async function setManualJiraAccountId(memberId, jiraAccountId) {
 module.exports = {
   findOrCreate,
   findById,
+  findBySlackUserId,
   findAll,
   updateEmail,
   updateJiraAccountId,
