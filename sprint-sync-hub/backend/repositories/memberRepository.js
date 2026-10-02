@@ -104,6 +104,28 @@ async function setManualJiraAccountId(memberId, jiraAccountId) {
   return updateJiraAccountId(memberId, jiraAccountId, 'manual');
 }
 
+/**
+ * Links a member to a GitHub username, or clears the link with null.
+ * Logins are unique within an organisation, case-insensitively.
+ */
+async function setGithubLogin(memberId, githubLogin) {
+  try {
+    const { rows } = await db.query(
+      'UPDATE members SET github_login = $2 WHERE id = $1 RETURNING *',
+      [memberId, githubLogin || null]
+    );
+    return rows[0] || null;
+  } catch (err) {
+    if (err.code === '23505') {
+      const taken = new Error('That GitHub username is already linked to another team member');
+      taken.code = 'GITHUB_LOGIN_TAKEN';
+      throw taken;
+    }
+    console.error('[memberRepository.setGithubLogin]', err.message);
+    throw err;
+  }
+}
+
 module.exports = {
   findOrCreate,
   findById,
@@ -112,4 +134,5 @@ module.exports = {
   updateEmail,
   updateJiraAccountId,
   setManualJiraAccountId,
+  setGithubLogin,
 };

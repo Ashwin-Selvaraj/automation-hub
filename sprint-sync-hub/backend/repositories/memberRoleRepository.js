@@ -156,6 +156,7 @@ async function getAllMembersWithRoles(organisationId) {
         email:               member.email,
         jiraAccountId:       member.jira_account_id,
         jiraAccountIdSource: member.jira_account_id_source,
+        githubLogin:         member.github_login || null,
         isActive:            member.is_active,
         roles,
         hasTechnicalRole,

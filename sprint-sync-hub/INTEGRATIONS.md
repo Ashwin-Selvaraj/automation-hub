@@ -45,6 +45,7 @@ Zoho `location`, `accounts-server`, and `api_domain` metadata are retained per e
 5. [Manual Jira ID Override](#manual-jira-id-override)
 6. [API Endpoints Reference](#api-endpoints-reference)
 7. [Common Errors & Fixes](#common-errors--fixes)
+8. [GitHub Integration](#github-integration)
 
 ---
 
@@ -433,3 +434,50 @@ Manually set IDs are stored with `source = 'manual'` and are **never overwritten
 | `403` from Jira sprint creation | Account lacks Manage Sprints permission | Ask Jira admin to grant it |
 | `No Jira user found with this email` | Member's Jira account uses a different email | Use the manual Jira ID override in the Team tab |
 | `jira_account_id` is null after sync | Email sync hasn't run yet | Run `POST /api/members/sync-all` |
+
+---
+
+## GitHub Integration
+
+Read-only. It lists open pull requests, their events, and their reviews, and never writes to GitHub. The token it needs is a **fine-grained personal access token** with *read-only* "Pull requests" and "Metadata" access on the repositories in `GITHUB_REPOS`, and nothing more.
+
+| Variable | Required | Description |
+|---|---|---|
+| `GITHUB_TOKEN` | Yes | Fine-grained, read-only. Never returned by any endpoint. |
+| `GITHUB_REPOS` | Yes | Comma-separated `owner/repo`. Malformed names are reported, not silently ignored. |
+| `GITHUB_REVIEW_SLA_HOURS` | No | Working hours before a wait is flagged. Default `24`. |
+| `GITHUB_REVIEW_STALE_DAYS` | No | Working days after which a wait is "parked". Default `10`. |
+| `GITHUB_REVIEW_IGNORE_LABELS` | No | Comma-separated labels (case-insensitive) that hide a pull request. |
+| `GITHUB_CACHE_SECONDS` | No | Response cache. Default `300`; `0` disables. |
+| `GITHUB_API_URL` | No | GitHub Enterprise Server. Must be `https`. |
+| `REVIEW_NUDGE_TIME` | No | When the optional digest runs. Default `10:30`. |
+
+### How a wait is decided
+
+- **Who owes a review** is the pull request's *current* `requested_reviewers`. GitHub removes a reviewer from that list when they submit a review and puts them back on a re-request, so the list already means "the ball is in this person's court" — including the case where changes were requested and it is the author's turn.
+- **Since when** is per reviewer: that reviewer's own most recent `review_requested` event, never earlier than when the pull request became ready for review (`ready_for_review` for a draft that was opened as one).
+- **The clock** only runs during `WORK_START_TIME`–`WORK_END_TIME` on working days (`WORKDAYS`) in `TIMEZONE`. There is no holiday calendar, so a public holiday counts as a working day.
+- **Pull requests nobody was asked to review** are reported separately — unless a person other than the author has already reviewed them.
+- **A pull request is skipped, not guessed at,** when its events cannot be read: defaulting to the opening time would overstate the wait.
+- **Left out entirely:** drafts, bot-authored pull requests, bot reviewers, ignored labels.
+
+### Linking people
+
+Set a member's GitHub username on the **Team** tab, or `PATCH /api/members/:memberId/github-login` with `{ "githubLogin": "bob-dev" }` (an empty value unlinks). A pasted `@` is tolerated; the name is validated against GitHub's rules; it must be unique within the organisation, case-insensitively. Reviewers with no linked person are still shown, by username.
+
+### Endpoints
+
+| Method | Endpoint | What it does |
+|---|---|---|
+| `GET` | `/api/github/status` | Configured or not, and whether the token can actually see each repository. |
+| `GET` | `/api/github/reviews` | The full assessment. `?fresh=true` bypasses the cache. |
+| `PATCH` | `/api/members/:memberId/github-login` | Link or unlink a GitHub username. |
+
+### Common GitHub errors
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `GitHub 404 … the token cannot access it` | GitHub answers 404, not 403, for a repository the token cannot see | Add the repository to the token's access, or correct the name in `GITHUB_REPOS`. `/api/github/status` shows which repository. |
+| `GitHub 401 … token is invalid or expired` | Expired or revoked token | Create a new fine-grained token. |
+| `rate limit reached` | Too many reads | Raise `GITHUB_CACHE_SECONDS`. |
+| The brief shows "Review waits are incomplete" | One or more repositories could not be read | The warning names them; the rest of the brief is unaffected. |

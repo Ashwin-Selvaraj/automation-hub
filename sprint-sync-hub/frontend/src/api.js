@@ -69,6 +69,7 @@ export const getMembers        = ()                            => request('/api/
 export const getMember         = (memberId)                    => request(`/api/members/${memberId}`);
 export const getJiraIdStatus   = ()                            => request('/api/members/jira-id-status');
 export const setMemberJiraId   = (memberId, jiraAccountId)     => request(`/api/members/${memberId}/jira-id`, { method: 'PATCH', body: JSON.stringify({ jiraAccountId }) });
+export const setMemberGithubLogin = (memberId, githubLogin) => request(`/api/members/${memberId}/github-login`, { method: 'PATCH', body: JSON.stringify({ githubLogin }) });
 export const fetchSlackEmails  = ()                            => request('/api/members/fetch-slack-emails', { method: 'POST', body: JSON.stringify({}) });
 export const fetchJiraIds      = ()                            => request('/api/members/fetch-jira-ids',     { method: 'POST', body: JSON.stringify({}) });
 export const syncAll           = ()                            => request('/api/members/sync-all',           { method: 'POST', body: JSON.stringify({}) });

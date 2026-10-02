@@ -26,7 +26,9 @@ async function run({ orgId, cfg }) {
     return { skipped: 'no TEAM_LEAD_SLACK_ID or manager configured' };
   }
 
-  const signals = await briefService.collect(orgId);
+  // This goes out as a message, so it waits for current, complete GitHub data
+  // rather than settling for the quick cached answer the dashboard uses.
+  const signals = await briefService.collect(orgId, { reviewBudgetMs: 60_000, freshReviews: true });
   const text    = briefService.render(signals);
 
   const outcome = await notifier.sendDM({

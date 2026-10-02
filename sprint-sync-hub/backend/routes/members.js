@@ -5,12 +5,17 @@ const router               = express.Router();
 const memberRepository     = require('../repositories/memberRepository');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const slackService         = require('../services/slackService');
+const prReviewService      = require('../services/prReviewService');
 const jiraService          = require('../services/jiraService');
 const auditLog = require('../core/auditLog');
 const { getOrgId } = require('../core/orgContext');
 
 // Jira account ID format: 24-char alphanumeric
 const JIRA_ID_RE = /^[a-zA-Z0-9]{24}$/;
+
+// GitHub usernames: 1-39 characters, letters, digits and single hyphens, and
+// they cannot start or end with a hyphen.
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 
 // ─── GET /api/members ─────────────────────────────────────────────────────────
 // Returns all members with their roles, email, jira_account_id.
@@ -87,6 +92,54 @@ router.patch('/:memberId/jira-id', async (req, res) => {
     res.json({ success: true, member: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── PATCH /api/members/:memberId/github-login ────────────────────────────────
+// Link a member to their GitHub username, or clear it with an empty value.
+// GitHub does not reliably expose an email address, so unlike Jira this cannot
+// be matched automatically.
+
+router.patch('/:memberId/github-login', async (req, res) => {
+  try {
+    const memberId = parseInt(req.params.memberId, 10);
+    if (!Number.isInteger(memberId)) return res.status(400).json({ error: 'Invalid member id' });
+
+    let githubLogin = req.body?.githubLogin;
+    if (githubLogin == null || String(githubLogin).trim() === '') {
+      githubLogin = null;
+    } else {
+      githubLogin = String(githubLogin).trim().replace(/^@/, '');
+      if (!GITHUB_LOGIN_RE.test(githubLogin) || githubLogin.includes('--')) {
+        return res.status(400).json({
+          error: 'That is not a valid GitHub username. Use the name after github.com/ — letters, numbers and single hyphens, up to 39 characters.',
+        });
+      }
+    }
+
+    const member = await memberRepository.findById(memberId);
+    if (!member || member.organisation_id !== getOrgId()) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    const updated = await memberRepository.setGithubLogin(memberId, githubLogin);
+    // Review waits name people through this link, so cached ones are now stale.
+    prReviewService.invalidate();
+
+    auditLog.record(getOrgId(), {
+      type:     'github_login_set',
+      userName: member.name,
+      action:   githubLogin
+        ? `GitHub username linked for ${member.name}`
+        : `GitHub username unlinked for ${member.name}`,
+      success:  true,
+    });
+
+    res.json({ success: true, member: updated });
+  } catch (err) {
+    if (err.code === 'GITHUB_LOGIN_TAKEN') return res.status(409).json({ error: err.message });
+    console.error('[PATCH /api/members/:memberId/github-login]', err.message);
+    res.status(500).json({ error: 'Could not update the GitHub username' });
   }
 });
 

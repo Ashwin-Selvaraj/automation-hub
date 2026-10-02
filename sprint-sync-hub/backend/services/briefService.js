@@ -5,6 +5,8 @@ const sprintRepo  = require('../repositories/sprintRepository');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const attendanceService = require('./attendanceService');
 const deliveryRiskService = require('./deliveryRiskService');
+const prReviewService = require('./prReviewService');
+const slackText = require('../utils/slackText');
 const claudeService = require('./claudeService');
 const { getSprintWindow } = require('../utils/dateUtils');
 
@@ -58,7 +60,14 @@ function workingDaysRemaining(endDate) {
  * @param {string} [opts.date]      Defaults to today.
  * @param {boolean} [opts.withFocus] Whether to ask the model for the focus line.
  */
-async function collect(organisationId, { date, withFocus = true } = {}) {
+async function collect(organisationId, {
+  date,
+  withFocus = true,
+  // How long to wait for GitHub. A page load should never stall on it; the
+  // morning DM passes a long budget and demands fresh data.
+  reviewBudgetMs = 4000,
+  freshReviews = false,
+} = {}) {
   const today  = date || toDateStr(new Date());
   const sprint = await sprintRepo.getActiveSprint(organisationId);
   const sprintId = sprint ? sprint.id : null;
@@ -97,12 +106,23 @@ async function collect(organisationId, { date, withFocus = true } = {}) {
   // Delivery risk rides along in the brief rather than becoming three more
   // messages. A lead who gets a separate DM for the forecast, one for WIP and
   // one for scope creep is back to being paged all morning.
-  let risk = null;
-  try {
-    risk = await deliveryRiskService.assess(organisationId);
-  } catch (err) {
-    console.warn('[brief] delivery risk assessment failed:', err.message);
-  }
+  //
+  // Pull requests waiting on review are read at the same time, so a slow GitHub
+  // adds nothing to the time it takes to build the rest.
+  const [risk, reviews] = await Promise.all([
+    deliveryRiskService.assess(organisationId).catch((err) => {
+      console.warn('[brief] delivery risk assessment failed:', err.message);
+      return null;
+    }),
+    prReviewService.assessWithin(organisationId, {
+      budgetMs: reviewBudgetMs,
+      ...(freshReviews ? { maxAgeMs: 0 } : {}),
+    }).catch((err) => {
+      console.warn('[brief] review assessment failed:', err.message);
+      return null;
+    }),
+  ]);
+  const review = summariseReviews(reviews);
 
   let blockers = [];
   const updates = standups
@@ -142,6 +162,7 @@ async function collect(organisationId, { date, withFocus = true } = {}) {
     wipLimit:   risk ? risk.wipLimit : null,
     scopeAdded: risk ? risk.scopeAdded : [],
     scopeAddedShare: risk ? risk.scopeAddedShare : null,
+    ...review,
   };
 
   if (withFocus && hasAnythingToSay(signals)) {
@@ -155,15 +176,98 @@ async function collect(organisationId, { date, withFocus = true } = {}) {
   return signals;
 }
 
+/** Who a pull request is waiting on, as a lead would say it. */
+function reviewerLabel(entry) {
+  if (entry.kind === 'team') return `team ${entry.team}`;
+  if (entry.member) return entry.member.name;
+  return `@${entry.reviewer}`;
+}
+
+/**
+ * Reduces an assessment to what the brief shows. A wait is shown individually
+ * only when it is over the SLA and not parked; parked ones (waiting so long they
+ * are probably abandoned) are counted, not listed, so a handful of months-old
+ * pull requests can't bury the ones that are actually blocking someone.
+ *
+ * Returns the same keys whether or not GitHub is configured, so nothing
+ * downstream has to guard against them being missing.
+ */
+function summariseReviews(a) {
+  const empty = {
+    reviewsConfigured: false, reviewWaiting: [], reviewUnassigned: [], reviewParked: 0,
+    reviewSlaHours: null, reviewStaleDays: null, reviewErrors: [], reviewsPending: false, reviewsStale: false,
+  };
+  if (!a || !a.configured) return empty;
+
+  const live = (list) => list.filter((e) => e.overSla && !e.stale);
+  const pick = (e) => ({
+    repo: e.repo, number: e.number, title: e.title, url: e.url, author: e.author,
+    who: e.kind === 'unassigned' ? null : reviewerLabel(e),
+    waitingHours: e.waitingHours, kind: e.kind,
+  });
+
+  return {
+    reviewsConfigured: true,
+    reviewWaiting:    live(a.waiting).map(pick),
+    reviewUnassigned: live(a.unassigned).map(pick),
+    reviewParked: [...a.waiting, ...a.unassigned].filter((e) => e.overSla && e.stale).length,
+    reviewSlaHours: a.slaHours,
+    reviewStaleDays: a.staleDays,
+    reviewErrors: a.errors || [],
+    reviewsPending: Boolean(a.pending),
+    reviewsStale: Boolean(a.stale),
+  };
+}
+
 function hasAnythingToSay(s) {
   return s.blockers.length > 0 || s.overdue.length > 0 || s.stale.length > 0 ||
          s.offPlan.length > 0 || s.noUpdate.length > 0 || s.unmatched.length > 0 ||
          s.dueSoon.length > 0 || (s.wip || []).length > 0 ||
+         (s.reviewWaiting || []).length > 0 || (s.reviewUnassigned || []).length > 0 ||
          ['at-risk', 'stalled'].includes(s.forecast?.status);
 }
 
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** The "waiting on review" section, as lines. Empty when there is nothing to say. */
+function renderReviews(s) {
+  if (!s.reviewsConfigured) return [];
+
+  const waiting    = s.reviewWaiting || [];
+  const unassigned = s.reviewUnassigned || [];
+  const total = waiting.length + unassigned.length;
+  const out = [];
+
+  const hours = (h) => `${Math.round(h)} working ${Math.round(h) === 1 ? 'hour' : 'hours'}`;
+  const ref = (e) => `${slackText.link(e.url, `${e.repo}#${e.number} ${e.title}`, { max: 70 })}`;
+
+  if (total > 0 || s.reviewParked > 0) {
+    out.push('', `*🔍 Waiting on review — ${total}*`);
+    const items = [
+      ...waiting.map((e) => `• ${ref(e)} — waiting on *${slackText.escape(e.who)}* for ${hours(e.waitingHours)}`),
+      ...unassigned.map((e) => `• ${ref(e)} — nobody asked to review it yet, ${hours(e.waitingHours)}`),
+    ];
+    out.push(...items.slice(0, 8));
+    if (items.length > 8) out.push(`_…and ${items.length - 8} more_`);
+    if (total > 0) out.push(`_Past the ${s.reviewSlaHours} working-hour mark._`);
+    if (s.reviewParked > 0) {
+      out.push(`_${s.reviewParked} more ${s.reviewParked === 1 ? 'has' : 'have'} been waiting over ${s.reviewStaleDays} working days — likely parked, so not listed._`);
+    }
+  }
+
+  // A silent failure would read as "nothing is waiting", which is the one thing
+  // a lead must not be told wrongly.
+  if ((s.reviewErrors || []).length > 0) {
+    const detail = s.reviewErrors.map((e) =>
+      `${slackText.escape(e.repo)} (${e.skippedPullRequests ? `${e.skippedPullRequests} pull request${e.skippedPullRequests === 1 ? '' : 's'} couldn't be read` : slackText.escape(slackText.truncate(e.error, 90))})`
+    ).join('; ');
+    out.push('', `_⚠ Review waits are incomplete — ${detail}._`);
+  }
+  if (s.reviewsPending) out.push('', '_Review data is still loading from GitHub — refresh in a moment._');
+
+  return out;
 }
 
 /** Renders the collected signals as Slack mrkdwn. */
@@ -212,6 +316,8 @@ function render(s) {
     }
   }
 
+  lines.push(...renderReviews(s));
+
   if ((s.wip || []).length) {
     lines.push('', `*🧺 Holding more than ${s.wipLimit} things at once — ${s.wip.length}*`);
     for (const p of s.wip) {
@@ -249,4 +355,4 @@ function render(s) {
   return lines.join('\n');
 }
 
-module.exports = { collect, render, STALE_DAYS, DUE_SOON_DAYS };
+module.exports = { collect, render, summariseReviews, STALE_DAYS, DUE_SOON_DAYS };
