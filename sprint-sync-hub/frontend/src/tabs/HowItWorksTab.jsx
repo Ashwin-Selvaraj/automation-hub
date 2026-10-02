@@ -297,11 +297,11 @@ export default function HowItWorksTab() {
 
         <TriggerCard
           icon="📅"
-          title="Your task is overdue"
+          title="Your task is past its due date"
           accentColor={colors.red600} accentBg="#FEF2F2"
           when="A Jira task assigned to you has a due date in the past and is not marked Done. Checked daily at 9:00 AM."
-          what="A DM with the task name, how many days overdue, and a direct Jira link. If the task is 3+ days overdue, a second escalation DM is also sent, and the manager is notified separately."
-          suppressed="Won't fire again for the same task within 24 hours."
+          what="One DM listing those tasks, each with a Jira link and its due date. If a date has simply moved, updating it in Jira is enough. Nothing further is sent: nobody is escalated to, and there is no second message however long a task stays open."
+          suppressed="Each task is mentioned at most once a week, and several tasks arrive together in one message, never one message each."
         />
 
         <TriggerCard
@@ -424,7 +424,7 @@ export default function HowItWorksTab() {
       }}>
         {[
           { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Daily brief',               desc: 'One DM to the lead: who is blocked, what is overdue, what has stopped moving, who was quiet.',      color: colors.blue600 },
-          { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Deadline check',            desc: 'Finds overdue Jira tasks and DMs the assignee — your own work, before anyone escalates it.',         color: colors.red600  },
+          { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Deadline check',            desc: 'One digest per person for tasks past their due date — each task mentioned once a week, nobody escalated to.',         color: colors.red600  },
           { time: '10:00 AM',              days: 'Every day',         label: 'Standup → Jira sync',       desc: 'Fetches Slack messages, runs Claude matching, posts Jira comments and transitions.',                  color: colors.green600},
           { time: 'Friday 5:00 PM',         days: 'Weekly',           label: 'Sprint report',             desc: 'AI-generated sprint summary posted to the standup channel and DM\'d to the manager.',                 color: colors.amber600},
           { time: '3:30 AM',               days: 'Every day',         label: 'Housekeeping',              desc: 'Clears expired deduplication claims and trims the activity log and run history.',                     color: colors.gray400 },
@@ -479,7 +479,7 @@ export default function HowItWorksTab() {
           },
           {
             q: 'How do I stop receiving a specific DM?',
-            a: 'Ask your lead to switch that automation off — every one of them has a working toggle on the Overview tab, and turning it off takes effect immediately. Most of what used to generate DMs no longer does: the only message you can now receive about your own work is an overdue-task alert.',
+            a: 'Ask your lead to switch that automation off — every one of them has a working toggle on the Overview tab, and turning it off takes effect immediately. Most of what used to generate DMs no longer does: the only message you can now receive about your own work is a single past-due-tasks digest, with each task mentioned at most once a week.',
           },
           {
             q: 'Why did the reminders stop?',

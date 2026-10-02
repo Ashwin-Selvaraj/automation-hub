@@ -9,11 +9,9 @@ const statsRepo            = require('../repositories/statsRepository');
 const notifRepo            = require('../repositories/notificationRepository');
 const memberRoleRepository = require('../repositories/memberRoleRepository');
 const scoringService       = require('./scoringService');
-const slackService         = require('./slackService');
-const jiraService          = require('./jiraService');
-const claudeService        = require('./claudeService');
 const { getSprintConfig }  = require('../services/configService');
 const auditLog = require('../core/auditLog');
+const { dateOnlyString } = require('../utils/dateOnly');
 const { getOrgId } = require('../core/orgContext');
 
 /**
@@ -191,100 +189,49 @@ async function recordNoMatchDM(organisationId, sprintId, memberId, slackMessageT
   }
 }
 
-async function runDailyDeadlineCheck(organisationId, sprintId) {
-  const cfg = getSprintConfig();
-
+/**
+ * Records, for each task in the sprint that is past its due date, that the
+ * deadline was missed: the event row, and the day's stats that the performance
+ * score is built from. Sends nothing.
+ *
+ * It used to message people as well — one DM per overdue task, repeated daily,
+ * then a second "critically overdue, update immediately" DM to the engineer and a
+ * DM to the manager that the lead never saw first. Telling people about overdue
+ * work is now the deadline-check automation's job, done as one digest per person
+ * through the notifier, and the lead sees overdue work in the daily brief.
+ */
+async function recordDeadlineMisses(organisationId, sprintId) {
   let overdueTasks = [];
   try {
     overdueTasks = await taskRepo.getOverdueTasks(organisationId, sprintId);
   } catch (err) {
-    console.error('[performanceService.runDailyDeadlineCheck] getOverdueTasks:', err.message);
+    console.error('[performanceService.recordDeadlineMisses] getOverdueTasks:', err.message);
     return;
   }
 
+  const today = toDateStr(new Date());
+
   for (const task of overdueTasks) {
     try {
-      const daysOverdue = Math.floor(
-        (new Date() - new Date(task.due_date)) / 86400000
-      );
+      if (!task.assignee_id) continue;
 
-      if (task.assignee_id) {
-        let event = await deadlineRepo.findByTaskId(task.id);
-        if (!event) {
-          event = await deadlineRepo.recordDeadlineEvent(
-            organisationId, sprintId, task.assignee_id, task.id,
-            toDateStr(task.due_date), 'missed', daysOverdue
-          );
-        }
+      const daysOverdue = Math.floor((new Date() - new Date(task.due_date)) / 86400000);
 
-        const alreadyNotified = await notifRepo.wasNotifiedRecently(
-          task.assignee_id, 'deadline_reminder', task.id, 24
+      const existing = await deadlineRepo.findByTaskId(task.id);
+      if (!existing) {
+        await deadlineRepo.recordDeadlineEvent(
+          organisationId, sprintId, task.assignee_id, task.id,
+          // A DATE column, read back with local components (see utils/dateOnly).
+          dateOnlyString(task.due_date), 'missed', daysOverdue
         );
-
-        if (!alreadyNotified && task.slack_user_id) {
-          try {
-            // Role-based DM filtering — skip DM for managerial-only members
-            const canReceiveDM = await shouldSendTaskDM(task.assignee_id);
-            if (!canReceiveDM) {
-              if (process.env.TEAM_LEAD_SLACK_ID) {
-                const jiraSiteUrl = process.env.JIRA_SITE_URL || '';
-                const issueUrl = `${jiraSiteUrl.replace(/\/$/, '')}/browse/${task.jira_key}`;
-                const alertText = await claudeService.draftDeadlineDM(
-                  `[For your info] ${task.assignee_name || task.slack_user_id}'s task`,
-                  task.jira_key, task.title, daysOverdue, issueUrl
-                );
-                await slackService.sendDM(process.env.TEAM_LEAD_SLACK_ID, alertText);
-              }
-              continue; // skip member DM
-            }
-
-            const jiraSiteUrl = process.env.JIRA_SITE_URL || '';
-            const issueUrl = `${jiraSiteUrl.replace(/\/$/, '')}/browse/${task.jira_key}`;
-            const dmText = await claudeService.draftDeadlineDM(
-              task.assignee_name || task.slack_user_id,
-              task.jira_key,
-              task.title,
-              daysOverdue,
-              issueUrl
-            );
-            await slackService.sendDM(task.slack_user_id, dmText);
-            await notifRepo.recordNotification(
-              organisationId, task.assignee_id, 'deadline_reminder', 'dm', task.id
-            );
-            if (event) await deadlineRepo.incrementReminderCount(event.id);
-
-            if (daysOverdue > 3) {
-              const escalated =
-                `🚨 *Escalation — ${daysOverdue} days overdue*\n` +
-                `*${task.jira_key}*: "${task.title}"\n` +
-                `This task is critically overdue. Please update its status immediately.\n` +
-                `→ ${issueUrl}`;
-              await slackService.sendDM(task.slack_user_id, escalated);
-              await notifRepo.recordNotification(
-                organisationId, task.assignee_id, 'deadline_overdue_3d', 'dm', task.id
-              );
-
-              if (cfg.managerSlackId) {
-                const managerDM =
-                  `📋 *Overdue escalation* — ${daysOverdue} days\n` +
-                  `<@${task.slack_user_id}>'s task *${task.jira_key}* ("${task.title}") has not been updated.\n` +
-                  `→ ${issueUrl}`;
-                await slackService.sendDM(cfg.managerSlackId, managerDM);
-              }
-            }
-          } catch (dmErr) {
-            console.error('[performanceService.runDailyDeadlineCheck] DM failed:', dmErr.message);
-          }
-        }
-
-        const today = toDateStr(new Date());
-        await statsRepo.upsertDailyStats(organisationId, sprintId, task.assignee_id, today, {
-          deadlines_due:    1,
-          deadlines_missed: 1,
-        });
       }
+
+      await statsRepo.upsertDailyStats(organisationId, sprintId, task.assignee_id, today, {
+        deadlines_due:    1,
+        deadlines_missed: 1,
+      });
     } catch (err) {
-      console.error('[performanceService.runDailyDeadlineCheck] task error:', err.message);
+      console.error('[performanceService.recordDeadlineMisses] task error:', err.message);
     }
   }
 }
@@ -543,10 +490,11 @@ function buildRiskReason(m) {
 }
 
 module.exports = {
+  shouldSendTaskDM,
   syncMemberStandup,
   recordJiraSync,
   recordNoMatchDM,
-  runDailyDeadlineCheck,
+  recordDeadlineMisses,
   computeSprintSummary,
   refreshAllMemberSummaries,
   getMemberProfile,

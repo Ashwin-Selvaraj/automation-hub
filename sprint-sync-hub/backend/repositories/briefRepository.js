@@ -80,29 +80,36 @@ async function dueSoon(organisationId, sprintId, days = 2) {
 }
 
 /**
- * Tasks sitting in an in-progress state with no recorded transition for
- * `days` days. Work that has stopped moving without anyone saying so is the
- * signal a lead most often misses.
+ * Tasks sitting in an in-progress state with no movement for `days` days. Work
+ * that has stopped moving without anyone saying so is the signal a lead most
+ * often misses.
+ *
+ * "Movement" is the latest of Jira's own last-updated time (a comment, an edit or
+ * a status change all move it), the latest recorded status transition, and the
+ * creation date. last_synced_at is deliberately NOT used: the Jira task sync
+ * rewrites it every run, so every task would always look freshly touched. It is
+ * only the fallback for a row Jira has never reported on.
  */
 async function staleInProgress(organisationId, sprintId, days = 3) {
   const { rows } = await db.query(
-    `SELECT t.jira_key, t.title, t.status, m.name AS assignee,
-            GREATEST(
-              COALESCE(MAX(tr.transitioned_at), t.last_synced_at, t.created_at_jira),
-              t.created_at_jira
-            ) AS last_movement
-     FROM tasks t
-     LEFT JOIN members m ON m.id = t.assignee_id
-     LEFT JOIN task_transitions tr ON tr.task_id = t.id
-     WHERE t.organisation_id = $1
-       AND ($2::int IS NULL OR t.sprint_id = $2)
-       AND t.completed_at IS NULL
-       AND LOWER(t.status) NOT IN ('to do', 'todo', 'backlog', 'done', 'closed')
-     GROUP BY t.id, t.jira_key, t.title, t.status, m.name, t.last_synced_at, t.created_at_jira
-     HAVING GREATEST(
-              COALESCE(MAX(tr.transitioned_at), t.last_synced_at, t.created_at_jira),
-              t.created_at_jira
-            ) < NOW() - ($3 || ' days')::interval
+    `SELECT jira_key, title, status, assignee, last_movement
+     FROM (
+       SELECT t.jira_key, t.title, t.status, m.name AS assignee,
+              COALESCE(
+                GREATEST(t.jira_updated_at, MAX(tr.transitioned_at), t.created_at_jira::timestamptz),
+                t.last_synced_at
+              ) AS last_movement
+       FROM tasks t
+       LEFT JOIN members m ON m.id = t.assignee_id
+       LEFT JOIN task_transitions tr ON tr.task_id = t.id
+       WHERE t.organisation_id = $1
+         AND ($2::int IS NULL OR t.sprint_id = $2)
+         AND t.completed_at IS NULL
+         AND LOWER(t.status) NOT IN ('to do', 'todo', 'backlog', 'done', 'closed')
+       GROUP BY t.id, t.jira_key, t.title, t.status, m.name,
+                t.jira_updated_at, t.created_at_jira, t.last_synced_at
+     ) moving
+     WHERE last_movement < NOW() - ($3 || ' days')::interval
      ORDER BY last_movement ASC
      LIMIT 25`,
     [organisationId, sprintId, days]

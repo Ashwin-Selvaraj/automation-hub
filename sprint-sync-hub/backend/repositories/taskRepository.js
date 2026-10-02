@@ -37,6 +37,71 @@ async function upsertTask(organisationId, sprintId, jiraKey, title, status, prio
   }
 }
 
+/**
+ * Writes one issue as Jira reports it. Jira is the source of truth here, which is
+ * why — unlike upsertTask, which only ever adds — this overwrites the assignee and
+ * due date outright, including with NULL when Jira has cleared them.
+ *
+ * Completion:
+ *   done      → Jira's own resolution date when it has one, so a task finished
+ *               months ago and first seen today is dated when it was really
+ *               finished, not when this system happened to notice. Otherwise the
+ *               earlier recorded time, otherwise now.
+ *   not done  → NULL, so a reopened task stops counting as finished.
+ *
+ * `sprintId` only ever attaches: a null leaves an existing attachment alone, so a
+ * task that has since left the active sprint keeps the sprint it was in.
+ *
+ * @returns {Promise<{ id: number, inserted: boolean }>}
+ */
+async function syncFromJira(organisationId, t) {
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO tasks
+         (organisation_id, sprint_id, jira_key, title, status, priority, assignee_id,
+          due_date, created_at_jira, completed_at, last_synced_at, jira_updated_at, issue_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+               CASE WHEN $10::boolean THEN COALESCE($11::timestamptz, NOW()) ELSE NULL END,
+               NOW(), $12::timestamptz, $13)
+       ON CONFLICT (organisation_id, jira_key) DO UPDATE SET
+         title           = EXCLUDED.title,
+         status          = EXCLUDED.status,
+         priority        = EXCLUDED.priority,
+         assignee_id     = EXCLUDED.assignee_id,
+         due_date        = EXCLUDED.due_date,
+         created_at_jira = COALESCE(EXCLUDED.created_at_jira, tasks.created_at_jira),
+         sprint_id       = COALESCE(EXCLUDED.sprint_id, tasks.sprint_id),
+         completed_at    = CASE WHEN $10::boolean
+                                THEN COALESCE($11::timestamptz, tasks.completed_at, NOW())
+                                ELSE NULL END,
+         last_synced_at  = NOW(),
+         jira_updated_at = EXCLUDED.jira_updated_at,
+         issue_type      = EXCLUDED.issue_type
+       RETURNING id, (xmax = 0) AS inserted`,
+      [
+        organisationId,
+        t.sprintId || null,
+        t.jiraKey,
+        t.title,
+        // Clipped to the column widths so one oddly long value cannot fail a sync.
+        String(t.status || 'To Do').slice(0, 100),
+        t.priority ? String(t.priority).slice(0, 50) : null,
+        t.assigneeId || null,
+        t.dueDate || null,
+        t.createdOn || null,
+        Boolean(t.isDone),
+        t.resolvedAt || null,
+        t.updatedAt || null,
+        t.issueType ? String(t.issueType).slice(0, 50) : null,
+      ]
+    );
+    return { id: rows[0].id, inserted: rows[0].inserted === true };
+  } catch (err) {
+    console.error('[taskRepository.syncFromJira]', t.jiraKey, err.message);
+    throw err;
+  }
+}
+
 async function findBySprintAndAssignee(sprintId, assigneeId) {
   try {
     const { rows } = await db.query(
@@ -176,4 +241,4 @@ async function getActiveTaskCountsPerMember(organisationId) {
   }
 }
 
-module.exports = { upsertTask, findBySprintAndAssignee, findByJiraKey, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember, getIncompleteTasksBySprint, getByIds };
+module.exports = { upsertTask, syncFromJira, findBySprintAndAssignee, findByJiraKey, markCompleted, getOverdueTasks, countByStatus, getActiveTaskCountsPerMember, getIncompleteTasksBySprint, getByIds };

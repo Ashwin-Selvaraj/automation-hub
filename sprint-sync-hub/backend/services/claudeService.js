@@ -300,43 +300,6 @@ async function draftMissingUpdateDM(memberName, channelName, sprintName) {
 }
 
 /**
- * Drafts a DM alerting a team member about an overdue Jira issue.
- * @param {string} memberName - Team member's display name
- * @param {string} issueKey - Jira issue key
- * @param {string} issueTitle - Jira issue summary
- * @param {number} daysOverdue - Number of days past due date
- * @param {string} issueUrl - Direct URL to the Jira issue
- * @returns {Promise<string>} DM text to send
- */
-async function draftDeadlineDM(memberName, issueKey, issueTitle, daysOverdue, issueUrl) {
-  try {
-    const client = getClient();
-
-    const res = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      messages: [
-        {
-          role: 'user',
-          content: `Write a brief, professional but empathetic Slack DM to ${memberName} about their overdue Jira issue.
-
-Issue: ${issueKey} — "${issueTitle}"
-Days overdue: ${daysOverdue}
-Link: ${issueUrl}
-
-Keep it under 4 sentences. Be direct but kind. Offer to help if blocked. Include the issue link. Start with "Hey ${memberName} 👋". Return only the DM text.`,
-        },
-      ],
-    });
-
-    return res.content[0]?.text?.trim() || `Hey ${memberName} 👋 ${issueKey} — "${issueTitle}" is ${daysOverdue} day(s) overdue. Could you update the status? ${issueUrl}`;
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] claudeService.draftDeadlineDM error:`, err.message);
-    throw new Error(`Claude draftDeadlineDM failed: ${err.message}`);
-  }
-}
-
-/**
  * Generates a formatted weekly sprint report for posting to Slack.
  * @param {string} weekLabel - e.g. "Week 1" or "Full Sprint"
  * @param {Array<{ name: string, updateCount: number, workingDays: number, updates: string[] }>} memberActivity
@@ -603,7 +566,6 @@ module.exports = {
   matchHuddleToJira,
   draftNoMatchDM,
   draftMissingUpdateDM,
-  draftDeadlineDM,
   draftMismatchDM,
   draftTeamLeadAlert,
   generateWeeklyReport,

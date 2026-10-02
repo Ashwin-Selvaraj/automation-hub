@@ -9,6 +9,8 @@ const prReviewService = require('./prReviewService');
 const slackText = require('../utils/slackText');
 const claudeService = require('./claudeService');
 const { getSprintWindow } = require('../utils/dateUtils');
+const { dateOnlyString, todayInZone } = require('../utils/dateOnly');
+const configService = require('./configService');
 
 /**
  * The daily lead brief.
@@ -38,11 +40,10 @@ function yesterdayOf(date) {
   return toDateStr(d);
 }
 
-/** Working days left in the sprint, counting today. */
-function workingDaysRemaining(endDate) {
+/** Working days left in the sprint, counting today. Both dates are YYYY-MM-DD. */
+function workingDaysRemaining(endDate, todayStr) {
   const end = new Date(`${endDate}T00:00:00.000Z`);
-  const cursor = new Date();
-  cursor.setUTCHours(0, 0, 0, 0);
+  const cursor = new Date(`${todayStr}T00:00:00.000Z`);
   let count = 0;
   while (cursor <= end) {
     const day = cursor.getUTCDay();
@@ -68,7 +69,9 @@ async function collect(organisationId, {
   reviewBudgetMs = 4000,
   freshReviews = false,
 } = {}) {
-  const today  = date || toDateStr(new Date());
+  const timeZone = configService.getSprintConfig().timezone;
+  // The team's today, not UTC's: before 05:30 in Kolkata the UTC date is still yesterday.
+  const today  = date || todayInZone(timeZone);
   const sprint = await sprintRepo.getActiveSprint(organisationId);
   const sprintId = sprint ? sprint.id : null;
 
@@ -140,8 +143,8 @@ async function collect(organisationId, {
   const silentToday = silent.filter((m) => isTracked(m.name) && !absentNames.has(m.name));
 
   const window = getSprintWindow();
-  const daysLeft = sprint ? workingDaysRemaining(sprint.end_date ? toDateStr(new Date(sprint.end_date)) : window.endStr)
-                          : workingDaysRemaining(window.endStr);
+  const sprintEnd = (sprint && dateOnlyString(sprint.end_date)) || window.endStr;
+  const daysLeft  = workingDaysRemaining(sprintEnd, todayInZone(timeZone));
 
   const signals = {
     date: today,

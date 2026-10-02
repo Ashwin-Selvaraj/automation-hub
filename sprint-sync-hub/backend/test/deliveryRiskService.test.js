@@ -104,6 +104,17 @@ test('unassigned open work is called out in the at-risk summary', () => {
   assert.match(out.summary, /3 of the open tasks have no assignee/);
 });
 
+test('a single unassigned task reads grammatically', () => {
+  const out = risk.forecast({
+    open: 12, done: 2, unassigned: 1,
+    completionsByDay: days({ '2026-09-08': 1, '2026-09-10': 1 }),
+    startDate: START, endDate: END,
+    today: new Date('2026-09-11T12:00:00Z'),
+  });
+  assert.match(out.summary, /1 open task has no assignee\./);
+  assert.ok(!/1 of the open task/.test(out.summary));
+});
+
 test('the last day of a sprint leaves no remaining capacity', () => {
   const out = risk.forecast({
     open: 4, done: 6, unassigned: 0,
