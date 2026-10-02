@@ -47,7 +47,8 @@ stubModule('core/idempotency', {
 stubModule('core/auditLog', { record: () => Promise.resolve() });
 
 stubModule('services/configService', {
-  getSprintConfig: () => ({ timezone: 'UTC' }),
+  // Every day a working day, so these tests do not depend on the day they run.
+  getSprintConfig: () => ({ timezone: 'UTC', workdays: '0-6' }),
 });
 
 const notifier = require('../core/notifier');
@@ -154,4 +155,24 @@ test('a missing recipient is reported, not thrown', async () => {
   const out = await notifier.sendDM({ orgId: 1, slackUserId: '', text: 'hi', dedupeKey: 'k3', type: 'test' });
   assert.equal(out.sent, false);
   assert.equal(out.reason, 'no recipient');
+});
+
+test('quiet hours follow the team’s working days and zone, not a fixed weekend', () => {
+  process.env.WORK_START_TIME = '09:00';
+  process.env.WORK_END_TIME   = '18:00';
+  // Saturday 19 Sept 2026, 10:00 in Kolkata.
+  const saturdayMorning = new Date('2026-09-19T04:30:00Z');
+  const weekdays = { timezone: 'Asia/Kolkata', workdays: '1-5' };
+  const sixDays  = { timezone: 'Asia/Kolkata', workdays: '1-6' };
+
+  assert.equal(notifier.quietHoursCheck(weekdays, saturdayMorning).allowed, false);
+  assert.equal(notifier.quietHoursCheck(sixDays, saturdayMorning).allowed, true,
+    'a team that works Saturdays is not on a weekend on Saturday');
+
+  // Friday 18 Sept: 08:59 is early, 18:59 is inside the grace hour, 19:01 is not.
+  const at = (hhmm) => new Date(`2026-09-18T${hhmm}:00+05:30`);
+  assert.equal(notifier.quietHoursCheck(weekdays, at('08:59')).allowed, false);
+  assert.equal(notifier.quietHoursCheck(weekdays, at('09:00')).allowed, true);
+  assert.equal(notifier.quietHoursCheck(weekdays, at('18:59')).allowed, true);
+  assert.equal(notifier.quietHoursCheck(weekdays, at('19:01')).allowed, false);
 });

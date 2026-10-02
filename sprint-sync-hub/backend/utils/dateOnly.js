@@ -36,26 +36,8 @@ function dateOnlyToUtc(value) {
   return s ? new Date(`${s}T00:00:00.000Z`) : null;
 }
 
-/**
- * The calendar date, as "YYYY-MM-DD", that an instant falls on in an IANA zone.
- *
- * An issue created at 01:00 on the 14th in Kolkata is still the 13th in UTC, so
- * "which day was this" has to be asked in the team's zone, not read off the ISO
- * string.
- */
-function dateInZone(instant, timeZone) {
-  const parts = {};
-  for (const p of new Intl.DateTimeFormat('en-CA', {
-    timeZone: timeZone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date(instant))) {
-    if (p.type !== 'literal') parts[p.type] = p.value;
-  }
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-/** Today's calendar date in an IANA zone: "today" for a team in Kolkata is not UTC's today for the first 5½ hours of their day. */
-function todayInZone(timeZone, now = new Date()) {
-  return dateInZone(now, timeZone);
-}
+// Re-exported so existing callers keep importing dates from one place; the
+// zone arithmetic itself lives in utils/timeZone.
+const { dateInZone, todayInZone } = require('./timeZone');
 
 module.exports = { dateOnlyString, dateOnlyToUtc, dateInZone, todayInZone };
