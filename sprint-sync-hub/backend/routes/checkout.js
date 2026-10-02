@@ -14,13 +14,19 @@ const router             = express.Router();
 const memberRepo         = require('../repositories/memberRepository');
 const standupRepo        = require('../repositories/standupRepository');
 const notifRepo          = require('../repositories/notificationRepository');
+const sprintRepo         = require('../repositories/sprintRepository');
 const statsRepo          = require('../repositories/statsRepository');
 const { getOrgId } = require('../core/orgContext');
+const teamClock = require('../utils/teamClock');
+const { dateOnlyString, addDays, weekdayOf } = require('../utils/dateOnly');
+const { parseWorkdays } = require('../utils/workingTime');
+const { localParts } = require('../utils/timeZone');
 
+// A pg DATE arrives as a Date at local midnight; dateOnlyString reads it back
+// with local components, where toISOString() would give the previous day on a
+// server east of UTC.
 function toDateStr(d) {
-  if (!d) return new Date().toISOString().split('T')[0];
-  if (typeof d === 'string') return d.substring(0, 10);
-  return d.toISOString().split('T')[0];
+  return dateOnlyString(d) || teamClock.today();
 }
 
 // ─── GET /api/checkout/history ────────────────────────────────────────────────
@@ -40,12 +46,10 @@ router.get('/history', async (req, res) => {
     }
 
     // Generate the list of calendar days
+    const todayStr = teamClock.today();
     const calendarDays = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      calendarDays.push(toDateStr(d));
-    }
+    for (let i = days - 1; i >= 0; i--) calendarDays.push(addDays(todayStr, -i));
+    const workdaySet = parseWorkdays(teamClock.workdays());
 
     // Fetch daily stats from DB for these days (single query)
     const sprint = await sprintRepo.getActiveSprint(orgId);
@@ -70,8 +74,7 @@ router.get('/history', async (req, res) => {
     const history = calendarDays.map((date) => {
       const stat    = statsByDate[date];
       const standup = standupByDate[date];
-      const dow     = new Date(date + 'T12:00:00').getDay(); // 0=Sun, 6=Sat
-      const isWeekend = dow === 0 || dow === 6;
+      const isWeekend = !workdaySet.has(weekdayOf(date));
 
       const checkedOut    = stat ? (stat.check_out_time != null) : false;
       const postedStandup = standup != null;
@@ -93,7 +96,7 @@ router.get('/history', async (req, res) => {
         bulkCatchup,
         standupStatus: isWeekend ? 'weekend' : postedStandup ? 'posted' : bulkCatchup ? 'bulk' : 'missed',
         standupPostTime: standup?.created_at
-          ? new Date(standup.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+          ? (() => { const t = localParts(standup.created_at, teamClock.teamZone()); return `${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`; })()
           : null,
         onLeave:    stat?.on_leave   ?? false,
         leaveType:  stat?.leave_type ?? null,

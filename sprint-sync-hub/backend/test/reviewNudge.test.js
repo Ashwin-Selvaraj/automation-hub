@@ -25,6 +25,7 @@ stubModule('core/notifier', {
 });
 
 const nudge = require('../automations/code/reviewNudge');
+const CFG = { timezone: 'Asia/Kolkata' };
 
 const bob   = { id: 1, name: 'Bob Stone',  slackUserId: 'UBOB' };
 const carol = { id: 2, name: 'Carol Ng',   slackUserId: 'UCAROL' };
@@ -51,7 +52,7 @@ test('it ships disabled, as a reviewer-facing automation in the code category', 
 
 test('it demands fresh data and is willing to wait for it, because it sends messages', async () => {
   setup([]);
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal(assessOpts.maxAgeMs, 0);
   assert.ok(assessOpts.budgetMs >= 30_000);
 });
@@ -61,7 +62,7 @@ test('one message per person, however many pull requests wait on them', async ()
     e({ number: 1 }), e({ number: 2 }), e({ number: 3 }),
     e({ number: 4, member: carol, reviewer: 'carol' }),
   ]);
-  const summary = await nudge.run({ orgId: 1 });
+  const summary = await nudge.run({ orgId: 1, cfg: CFG });
 
   assert.equal(sent.length, 2, 'Bob has three waiting, Carol one — two messages, not four');
   assert.equal(summary.reviewers, 2);
@@ -74,13 +75,13 @@ test('one message per person, however many pull requests wait on them', async ()
 
 test('a single waiting pull request reads grammatically', async () => {
   setup([e({})]);
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   assert.match(sent[0].text, /1 pull request is waiting for your review/);
 });
 
 test('each digest has a per-person, per-day dedupe key, so a restart cannot send it twice', async () => {
   setup([e({}), e({ number: 2, member: carol, reviewer: 'carol' })]);
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   const keys = sent.map((m) => m.dedupeKey).sort();
   assert.match(keys[0], /^pr-review-digest:1:\d{4}-\d{2}-\d{2}$/);
   assert.match(keys[1], /^pr-review-digest:2:\d{4}-\d{2}-\d{2}$/);
@@ -89,14 +90,14 @@ test('each digest has a per-person, per-day dedupe key, so a restart cannot send
 
 test('waits within the SLA are not included', async () => {
   setup([e({ overSla: false, waitingHours: 5 })]);
-  const summary = await nudge.run({ orgId: 1 });
+  const summary = await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal(sent.length, 0);
   assert.equal(summary.reviewers, 0);
 });
 
 test('parked pull requests are never nudged about — that is the lead\'s call', async () => {
   setup([e({ waitingHours: 1200, stale: true })]);
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal(sent.length, 0, 'nobody is messaged about a PR that has sat for months');
 });
 
@@ -105,13 +106,13 @@ test('a reviewer with nothing but parked work is not messaged, while one with li
     e({ number: 1, stale: true, waitingHours: 900 }),
     e({ number: 2, member: carol, reviewer: 'carol' }),
   ]);
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   assert.deepEqual(sent.map((m) => m.slackUserId), ['UCAROL']);
 });
 
 test('a parked pull request is left out of a digest that has live ones', async () => {
   setup([e({ number: 1 }), e({ number: 2, stale: true, waitingHours: 900 })]);
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal((sent[0].text.match(/^• /gm) || []).length, 1);
   assert.ok(!sent[0].text.includes('#2 '));
 });
@@ -123,7 +124,7 @@ test('a reviewer with no linked Slack account is skipped and counted, never gues
     e({ number: 3, member: null, reviewer: 'Stranger' }),
     e({ number: 4 }),
   ]);
-  const summary = await nudge.run({ orgId: 1 });
+  const summary = await nudge.run({ orgId: 1, cfg: CFG });
 
   assert.deepEqual(sent.map((m) => m.slackUserId), ['UBOB'], 'only the linked reviewer is messaged');
   assert.equal(summary.reviewersNotLinked, 2, 'two people, not three pull requests (logins compared case-insensitively)');
@@ -131,21 +132,21 @@ test('a reviewer with no linked Slack account is skipped and counted, never gues
 
 test('team requests cannot be tied to a person and are left to the lead', async () => {
   setup([e({ kind: 'team', team: 'backend', reviewer: undefined, member: null })]);
-  const summary = await nudge.run({ orgId: 1 });
+  const summary = await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal(sent.length, 0);
   assert.equal(summary.teamRequestsLeftToLead, 1);
 });
 
 test('pull requests with nobody asked are not sent to anyone — there is no one to send to', async () => {
   setup([], { unassigned: [e({ kind: 'unassigned', member: null, reviewer: undefined })] });
-  await nudge.run({ orgId: 1 });
+  await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal(sent.length, 0);
 });
 
 test('a message the notifier held back or de-duplicated is reported, not counted as sent', async () => {
   setup([e({})]);
   notifierOutcome = { sent: false, reason: 'outside working hours' };
-  const summary = await nudge.run({ orgId: 1 });
+  const summary = await nudge.run({ orgId: 1, cfg: CFG });
   assert.equal(summary.sent, 0);
   assert.equal(summary.heldOrDuplicate, 1);
 });
@@ -153,10 +154,10 @@ test('a message the notifier held back or de-duplicated is reported, not counted
 test('it does nothing, and says why, when GitHub is not configured or did not answer', async () => {
   sent.length = 0;
   assessment = { configured: false, reason: 'GITHUB_TOKEN is not set' };
-  assert.deepEqual(await nudge.run({ orgId: 1 }), { skipped: 'GITHUB_TOKEN is not set' });
+  assert.deepEqual(await nudge.run({ orgId: 1, cfg: CFG }), { skipped: 'GITHUB_TOKEN is not set' });
 
   assessment = { configured: true, pending: true, waiting: [], unassigned: [], errors: [] };
-  assert.match((await nudge.run({ orgId: 1 })).skipped, /did not respond/);
+  assert.match((await nudge.run({ orgId: 1, cfg: CFG })).skipped, /did not respond/);
   assert.equal(sent.length, 0);
 });
 

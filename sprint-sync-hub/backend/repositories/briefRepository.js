@@ -42,39 +42,43 @@ async function silentOn(organisationId, date) {
   return rows;
 }
 
-/** Open tasks past their due date, oldest first. */
-async function overdueTasks(organisationId, sprintId) {
+/**
+ * Open tasks past their due date, oldest first. `today` is the team's date
+ * (YYYY-MM-DD): the database's own notion of the date follows the server's timezone, which
+ * is not the team's.
+ */
+async function overdueTasks(organisationId, sprintId, today) {
   const { rows } = await db.query(
     `SELECT t.jira_key, t.title, t.status, t.due_date, m.name AS assignee,
-            (CURRENT_DATE - t.due_date) AS days_overdue
+            ($3::date - t.due_date) AS days_overdue
      FROM tasks t
      LEFT JOIN members m ON m.id = t.assignee_id
      WHERE t.organisation_id = $1
        AND ($2::int IS NULL OR t.sprint_id = $2)
        AND t.due_date IS NOT NULL
-       AND t.due_date < CURRENT_DATE
+       AND t.due_date < $3::date
        AND t.completed_at IS NULL
      ORDER BY t.due_date ASC
      LIMIT 25`,
-    [organisationId, sprintId]
+    [organisationId, sprintId, today]
   );
   return rows;
 }
 
-/** Tasks due within the next `days` days that are not finished yet. */
-async function dueSoon(organisationId, sprintId, days = 2) {
+/** Tasks due within the next `days` days of the team's `today` that are not finished yet. */
+async function dueSoon(organisationId, sprintId, days = 2, today) {
   const { rows } = await db.query(
     `SELECT t.jira_key, t.title, t.status, t.due_date, m.name AS assignee,
-            (t.due_date - CURRENT_DATE) AS days_until
+            (t.due_date - $4::date) AS days_until
      FROM tasks t
      LEFT JOIN members m ON m.id = t.assignee_id
      WHERE t.organisation_id = $1
        AND ($2::int IS NULL OR t.sprint_id = $2)
-       AND t.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + $3::int
+       AND t.due_date BETWEEN $4::date AND $4::date + $3::int
        AND t.completed_at IS NULL
      ORDER BY t.due_date ASC
      LIMIT 25`,
-    [organisationId, sprintId, days]
+    [organisationId, sprintId, days, today]
   );
   return rows;
 }

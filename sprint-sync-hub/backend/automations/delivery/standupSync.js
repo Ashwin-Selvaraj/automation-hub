@@ -11,6 +11,7 @@ const sprintRepo       = require('../../repositories/sprintRepository');
 const memberRepo       = require('../../repositories/memberRepository');
 const taskRepo         = require('../../repositories/taskRepository');
 const { getSprintWindow } = require('../../utils/dateUtils');
+const teamClock = require('../../utils/teamClock');
 const auditLog    = require('../../core/auditLog');
 const notifier    = require('../../core/notifier');
 const idempotency = require('../../core/idempotency');
@@ -30,12 +31,6 @@ const { daily }   = require('../schedule');
 // cursor with no lock at all.
 const SYNC_LOCK = 4711001;
 const CURSOR_KEY = 'huddle_sync:last_ts';
-
-function toDateStr(d) {
-  if (!d) return null;
-  if (typeof d === 'string') return d.substring(0, 10);
-  return d.toISOString().substring(0, 10);
-}
 
 async function run({ orgId, cfg }) {
   const lock = await db.query('SELECT pg_try_advisory_lock($1) AS acquired', [SYNC_LOCK]);
@@ -83,7 +78,7 @@ async function sync(orgId, cfg) {
 
   const sprint   = await sprintRepo.getActiveSprint(orgId);
   const sprintId = sprint ? sprint.id : null;
-  const today    = toDateStr(new Date());
+  const today    = teamClock.today();
 
   for (const msg of messages) {
     if (!msg.text || !msg.user) continue;
@@ -108,7 +103,7 @@ async function sync(orgId, cfg) {
                 await statsRepo.upsertDailyStats(orgId, sprintId, dbMember.id, entry.date, {
                   posted_standup: true,
                   bulk_post: true,
-                  bulk_post_actual_date: toDateStr(new Date(msg.ts * 1000 || Date.now())),
+                  bulk_post_actual_date: teamClock.dateOf(new Date(msg.ts * 1000 || Date.now())),
                 });
               } catch (statErr) {
                 console.warn('[standup-sync] bulk stat write failed:', statErr.message);

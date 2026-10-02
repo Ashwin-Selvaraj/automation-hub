@@ -40,4 +40,47 @@ function dateOnlyToUtc(value) {
 // zone arithmetic itself lives in utils/timeZone.
 const { dateInZone, todayInZone } = require('./timeZone');
 
-module.exports = { dateOnlyString, dateOnlyToUtc, dateInZone, todayInZone };
+// ─── Calendar arithmetic on YYYY-MM-DD strings ───────────────────────────────
+//
+// Done in UTC on date strings, so the answer is the same on a server in any
+// timezone. Date#setDate / getDay work in the *server's* zone and, around a
+// daylight-saving change or on a machine not in the team's zone, step to the
+// wrong day.
+
+const { parseWorkdays } = require('./workingTime');
+
+function addDays(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().substring(0, 10);
+}
+
+/** Whole calendar days from `from` to `to`; negative if `to` is earlier. */
+function daysBetween(from, to) {
+  return Math.round((new Date(`${to}T00:00:00.000Z`) - new Date(`${from}T00:00:00.000Z`)) / 86_400_000);
+}
+
+/** Weekday of a calendar date, 0 = Sunday. */
+function weekdayOf(dateStr) {
+  return new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
+}
+
+/**
+ * Every working date from `start` to `end` inclusive, as YYYY-MM-DD. `workdays`
+ * is the team's cron-style day-of-week field (default Monday-Friday), so a team
+ * that works Saturdays is not told Saturday is a weekend.
+ */
+function workingDatesBetween(start, end, workdays = '1-5') {
+  const days = workdays instanceof Set ? workdays : parseWorkdays(workdays);
+  const out = [];
+  const stop = dateOnlyString(end);
+  for (let d = dateOnlyString(start); d && stop && d <= stop; d = addDays(d, 1)) {
+    if (days.has(weekdayOf(d))) out.push(d);
+  }
+  return out;
+}
+
+module.exports = {
+  dateOnlyString, dateOnlyToUtc, dateInZone, todayInZone,
+  addDays, daysBetween, weekdayOf, workingDatesBetween,
+};

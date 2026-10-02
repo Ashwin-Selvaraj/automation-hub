@@ -7,7 +7,7 @@ const githubService    = require('./githubService');
 const prReviewService  = require('./prReviewService');
 const configService    = require('./configService');
 const slackText        = require('../utils/slackText');
-const { dateOnlyString, dateInZone, todayInZone } = require('../utils/dateOnly');
+const { dateOnlyString, dateInZone, todayInZone, addDays, daysBetween, weekdayOf } = require('../utils/dateOnly');
 
 /**
  * The people side of a lead's week: preparing for 1:1s, noticing work worth
@@ -41,20 +41,6 @@ const CADENCE_MIN_GAP = { weekly: 0, fortnightly: 10, monthly: 24 };
 const NOT_STARTED = new Set(['to do', 'todo', 'backlog', 'open', 'new', 'selected for development']);
 
 // ─── Dates ────────────────────────────────────────────────────────────────────
-
-function addDays(dateStr, n) {
-  const d = new Date(`${dateStr}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().substring(0, 10);
-}
-
-function daysBetween(from, to) {
-  return Math.round((new Date(`${to}T00:00:00.000Z`) - new Date(`${from}T00:00:00.000Z`)) / 86_400_000);
-}
-
-function weekdayOf(dateStr) {
-  return new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
-}
 
 function isDateStr(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));

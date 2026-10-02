@@ -22,17 +22,28 @@
 const { query }    = require('../db');
 const zohoService  = require('./zohoService');
 const { getOrgId } = require('../core/orgContext');
+const teamClock    = require('../utils/teamClock');
+const { addDays } = require('../utils/dateOnly');
+const { localParts } = require('../utils/timeZone');
 
 const WORK_START_TIME = () => process.env.WORK_START_TIME  || '09:00';
 const LATE_GRACE_MINS = () => parseInt(process.env.LATE_GRACE_MINUTES || '15', 10);
 
-// ─── Timezone-correct date helper ─────────────────────────────────────────────
-// Using UTC would return yesterday's date after midnight IST — always use IST.
+// ─── The team's date and clock ────────────────────────────────────────────────
+// UTC would return yesterday's date for the first hours of an IST morning. These
+// follow the configured team timezone (Asia/Kolkata by default) rather than a
+// hard-coded +05:30 offset, so another office's team gets its own day.
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** HH:MM on the team's wall clock for an instant. */
+function teamClockTime(instant) {
+  const p = localParts(instant, teamClock.teamZone());
+  return `${pad2(p.hour)}:${pad2(p.minute)}`;
+}
 
 function getTodayIST() {
-  const now = new Date();
-  const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
-  return ist.toISOString().split('T')[0]; // YYYY-MM-DD in IST
+  return teamClock.today();
 }
 
 // ─── Time utilities ───────────────────────────────────────────────────────────
@@ -41,9 +52,8 @@ function parseTimeString(raw) {
   if (!raw) return null;
   const s = String(raw);
   if (s.includes('T')) {
-    // ISO datetime — convert to IST HH:MM
-    const ist = new Date(new Date(s).getTime() + 5.5 * 60 * 60 * 1000);
-    return ist.toISOString().substring(11, 16);
+    // ISO datetime — convert to the team's HH:MM
+    return teamClockTime(s);
   }
   const m = s.match(/(\d{1,2}):(\d{2})/);
   return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
@@ -85,10 +95,9 @@ async function processZohoWebhook(payload) {
     const member = memberRes.rows[0];
 
     const eventDate   = new Date(timestamp);
-    // Convert to IST for date/time storage
-    const istDate     = new Date(eventDate.getTime() + 5.5 * 60 * 60 * 1000);
-    const dateStr     = istDate.toISOString().split('T')[0];
-    const timeStr     = istDate.toISOString().substring(11, 16);
+    // The team's date and clock time, for storage
+    const dateStr     = teamClock.dateOf(eventDate);
+    const timeStr     = teamClockTime(eventDate);
 
     const isCheckIn   = /check.?in|clockin|sign.?in/i.test(eventType);
     const isCheckOut  = /check.?out|clockout|sign.?out/i.test(eventType);
@@ -157,12 +166,9 @@ async function _getSlackPresenceAttendance(members, date) {
 
     const postMap = {};
     res.rows.forEach(row => {
-      // Convert to IST
-      const firstIST = new Date(new Date(row.first_post).getTime() + 5.5 * 60 * 60 * 1000);
-      const lastIST  = new Date(new Date(row.last_post).getTime()  + 5.5 * 60 * 60 * 1000);
       postMap[row.member_id] = {
-        firstPostTime: firstIST.toISOString().substring(11, 16),
-        lastPostTime:  lastIST.toISOString().substring(11, 16),
+        firstPostTime: teamClockTime(row.first_post),
+        lastPostTime:  teamClockTime(row.last_post),
         postCount:     parseInt(row.post_count, 10),
       };
     });
@@ -446,9 +452,9 @@ async function getMemberAttendanceHistory(memberId, days) {
             status, is_late, late_by_minutes
      FROM attendance_records
      WHERE member_id = $1
-       AND attendance_date >= CURRENT_DATE - ($2 || ' days')::INTERVAL
+       AND attendance_date >= $2::date
      ORDER BY attendance_date DESC`,
-    [memberId, days || 30]
+    [memberId, addDays(teamClock.today(), -(days || 30))]
   );
   return res.rows;
 }
@@ -461,9 +467,9 @@ async function getTeamAttendanceHistory(organisationId, days) {
      FROM attendance_records ar
      JOIN members m ON m.id = ar.member_id
      WHERE ar.organisation_id = $1
-       AND ar.attendance_date >= CURRENT_DATE - ($2 || ' days')::INTERVAL
+       AND ar.attendance_date >= $2::date
      ORDER BY ar.attendance_date DESC, m.name`,
-    [organisationId || getOrgId(), days || 7]
+    [organisationId || getOrgId(), addDays(teamClock.today(), -(days || 7))]
   );
   return res.rows;
 }
