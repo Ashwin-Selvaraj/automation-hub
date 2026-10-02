@@ -425,7 +425,9 @@ export default function HowItWorksTab() {
         {[
           { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Daily brief',               desc: 'One DM to the lead: who is blocked, what is overdue, what has stopped moving, who was quiet.',      color: colors.blue600 },
           { time: '9:00 AM',               days: 'Mon – Fri',         label: 'Deadline check',            desc: 'One digest per person for tasks past their due date — each task mentioned once a week, nobody escalated to.',         color: colors.red600  },
-          { time: '10:00 AM',              days: 'Every day',         label: 'Standup → Jira sync',       desc: 'Fetches Slack messages, runs Claude matching, posts Jira comments and transitions.',                  color: colors.green600},
+          { time: '8:30 AM',               days: 'On each 1:1 day',   label: '1:1 prep',                  desc: 'A DM to the lead before each 1:1: open follow-ups, recent work, what has stalled, and questions worth asking. Never sent to the person.', color: colors.blue600 },
+          { time: 'Friday 2:00 PM',        days: 'Weekly',            label: 'Recognition suggestions',   desc: 'A DM to the lead with specific work worth acknowledging. Nothing is posted.',                      color: colors.green600},
+          { time: '10:00 AM',              days: 'Every day',         label: 'Standup → Jira sync',      desc: 'Fetches Slack messages, runs Claude matching, posts Jira comments and transitions.',                  color: colors.green600},
           { time: 'Friday 5:00 PM',         days: 'Weekly',           label: 'Sprint report',             desc: 'AI-generated sprint summary posted to the standup channel and DM\'d to the manager.',                 color: colors.amber600},
           { time: '3:30 AM',               days: 'Every day',         label: 'Housekeeping',              desc: 'Clears expired deduplication claims and trims the activity log and run history.',                     color: colors.gray400 },
         ].map((job, i, arr) => (

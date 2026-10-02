@@ -22,6 +22,13 @@ Sprint-Sync Hub is an AI-powered automation system that connects your team's Sla
 - **Loud about gaps.** A wrong sprint field, a read cut short, no active sprint, or most issues assigned to unlinked people is written to the activity log rather than left to show up later as a quietly incomplete brief.
 - **Past-due digest.** Tasks past their due date reach their owner as one message a day listing them, each task at most once a week. There is no second "critical" message and no one is escalated to; the lead sees all overdue work in the daily brief.
 
+### People (lead only)
+- **1:1 prep** — on the morning of each person's 1:1, a DM to the lead: follow-ups either side still owes from last time, what they closed since, what is in progress or has stopped moving, anything they said in standup they were waiting on, their pull requests waiting for review, and a few questions worth asking. Set each person's 1:1 day and cadence on the **People** tab; nothing is sent until you do.
+- **1:1 notes and follow-ups** — record a 1:1 with private notes and agreed follow-ups for you or them. Notes and follow-ups are stored encrypted and never appear in the activity log or the evidence pack. Open follow-ups lead the next prep.
+- **Recognition suggestions** — weekly DM to the lead with specific work worth acknowledging: long-running tasks landed, work finished ahead of its date, bugs fixed, reviews done for teammates. Nothing is posted; people are listed alphabetically, never by volume.
+- **Review evidence** — for any person and period, the facts a performance review should start from: work completed by sprint, how due dates turned out, pull requests merged and reviews given, and a section on what the data cannot see. Downloadable as Markdown. No scores and no comparison with teammates.
+- **What it deliberately does not do:** no model writes anything about a person, nothing measures presence (standups posted, hours online, after-hours activity), and nothing about a person is sent to them or to a channel.
+
 ### AI-Assisted Sprint Planning & Task Assignment
 - **Sprint goal breakdown** — paste a sprint goal, Claude breaks it into individual Jira-ready tasks.
 - **Smart task assignment** — ranks team members per task using skill profile match, current workload, and past performance; creates the sprint and issues directly in Jira with assignees pre-filled.

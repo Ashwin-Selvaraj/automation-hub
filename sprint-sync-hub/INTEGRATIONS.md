@@ -47,6 +47,7 @@ Zoho `location`, `accounts-server`, and `api_domain` metadata are retained per e
 7. [Common Errors & Fixes](#common-errors--fixes)
 8. [GitHub Integration](#github-integration)
 9. [Jira Task Sync](#jira-task-sync)
+10. [People](#people)
 
 ---
 
@@ -519,3 +520,41 @@ Written to the activity log as a failure (once a day per distinct problem, not e
 - "Added after the sprint started" is judged from an issue's *creation* date. An old backlog item pulled into the sprint mid-sprint is not seen as scope added.
 - The sprint field is read from Jira Cloud's object form. Older Jira Server instances encode sprints as strings, which are not parsed.
 - This was verified against real Jira payload shapes and a scratch database, **not against your own Jira instance**. Check the first run's summary.
+
+---
+
+## People
+
+Three things for the lead, all on the **People** tab and all addressed to the lead only (`TEAM_LEAD_SLACK_ID`, falling back to `MANAGER_SLACK_ID`). Two are scheduled automations under the `people` category; the evidence pack is on demand.
+
+| Automation | Key | When | Default |
+|---|---|---|---|
+| 1:1 prep | `one-on-one-prep` | `ONE_ON_ONE_PREP_TIME` on working days, for people whose 1:1 is that day | on — does nothing until a 1:1 day is set |
+| Recognition suggestions | `weekly-recognition` | `RECOGNITION_DAY` at `RECOGNITION_TIME` | on |
+
+### Data
+
+Migration `022_one_on_ones.sql` adds `members.one_on_one_weekday` / `one_on_one_cadence`, and the tables `one_on_ones` (date, notes) and `one_on_one_actions` (follow-ups, owner `lead` or `member`). Notes and follow-up text are encrypted with `ENCRYPTION_KEY`; if that key changes, they cannot be read.
+
+Fortnightly and monthly cadences count from the last 1:1 **recorded** (at least 10 and 24 days), so a 1:1 moved by a few days does not push the next one a whole cycle away. Until one is recorded, a fortnightly person gets prep every week.
+
+### Rules it keeps
+
+- **Facts with sources, turned into questions.** Topics are fixed rules ("QG-7 has not moved in 6 days — is anything in the way?"), not model output. No model writes anything about a person.
+- **No presence measurement.** Standup counts, hours online and after-hours activity are not used.
+- **No rankings.** Recognition lists people alphabetically and only says "closed N tasks" when there is nothing more specific.
+- **Says what it cannot see.** The evidence pack ends with its limits: due dates are compared with each task's *current* due date (moves are not recorded), and work outside Jira and GitHub is invisible.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/people` | Members with 1:1 day, last 1:1 and open follow-ups |
+| PATCH | `/api/people/:memberId/schedule` | `{ weekday: 0-6 \| null, cadence }` |
+| GET | `/api/people/:memberId/prep` | The prep pack, as JSON and as the DM text |
+| GET / POST | `/api/people/:memberId/one-on-ones` | Recent 1:1s; record one `{ heldOn, notes, actions: [{ owner, text }] }` |
+| PATCH | `/api/people/actions/:actionId` | `{ done: true \| false }` |
+| GET | `/api/people/recognition?from=&to=` | Defaults to the last seven days |
+| GET | `/api/people/:memberId/evidence?from=&to=[&format=md]` | Up to 400 days |
+
+GitHub data (reviews given, PRs merged) needs `GITHUB_TOKEN`/`GITHUB_REPOS` and the person's GitHub username on the Team tab. Reviews are counted on pull requests merged in the period, up to 120 per read.

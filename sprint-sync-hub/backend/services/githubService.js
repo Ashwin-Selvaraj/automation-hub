@@ -197,6 +197,29 @@ async function listIssueEvents(repo, number) {
   return paginate(`${repoPath(repo)}/issues/${Number(number)}/events`);
 }
 
+/**
+ * Closed pull requests updated on or after `since` (an ISO timestamp), newest
+ * first. GitHub has no "merged after" filter, so this pages through closed pull
+ * requests by last update and stops at the first page that reaches back past
+ * `since` — a PR merged in the window was necessarily updated in it.
+ */
+async function listClosedPullRequestsSince(repo, since) {
+  const sinceMs = new Date(since).getTime();
+  const path = `${repoPath(repo)}/pulls`;
+  const items = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data, hasNext } = await getPage(path, {
+      state: 'closed', sort: 'updated', direction: 'desc', per_page: 100, page,
+    });
+    const rows = Array.isArray(data) ? data : [];
+    items.push(...rows.filter((pr) => new Date(pr.updated_at).getTime() >= sinceMs));
+    const reachedBack = rows.some((pr) => new Date(pr.updated_at).getTime() < sinceMs);
+    if (!hasNext || reachedBack) return items;
+  }
+  console.warn(`[github] ${path} has more than ${MAX_PAGES * 100} recently closed pull requests — the rest are not read`);
+  return items;
+}
+
 /** Submitted reviews on a pull request. */
 async function listReviews(repo, number) {
   return paginate(`${repoPath(repo)}/pulls/${Number(number)}/reviews`);
@@ -225,6 +248,6 @@ function _resetCache() {
 
 module.exports = {
   isConfigured, getRepos, getInvalidRepos, isValidRepoName,
-  listOpenPullRequests, listIssueEvents, listReviews, checkRepoAccess,
+  listOpenPullRequests, listClosedPullRequestsSince, listIssueEvents, listReviews, checkRepoAccess,
   _resetCache,
 };

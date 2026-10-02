@@ -123,3 +123,17 @@ function resolveModule(key) {
   }
   throw new Error(`No module found for key ${key}`);
 }
+
+test('people automations only ever message the lead', () => {
+  registry.load();
+  const people = registry.keys()
+    .map((key) => require(resolveModule(key)))
+    .filter((mod) => mod.category === 'people');
+
+  assert.ok(people.length >= 2, 'expected the 1:1 prep and recognition automations');
+  for (const mod of people) {
+    // Information about a person goes to their lead, never to the person or a
+    // channel: a 1:1 prep or a recognition list in the wrong place does harm.
+    assert.equal(mod.audience, 'lead', `${mod.key} is a people automation addressed to ${mod.audience}`);
+  }
+});
