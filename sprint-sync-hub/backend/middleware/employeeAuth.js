@@ -3,6 +3,8 @@
 const crypto = require('crypto');
 const authRepo = require('../repositories/employeeAuthRepository');
 const { safeEqual } = require('./auth');
+const { resolveCookiePolicy } = require('./cookiePolicy');
+const { allowedOrigins } = require('../utils/allowedOrigins');
 
 const SESSION_COOKIE = 'ah_employee_session';
 const LOGIN_COOKIE = 'ah_slack_login';
@@ -27,13 +29,16 @@ function parseCookies(req) {
 }
 
 function cookieOptions(maxAgeSeconds) {
+  // Read per call so a changed environment takes effect without a code change;
+  // resolving is a few string operations.
+  const policy = resolveCookiePolicy();
   const parts = [
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    `SameSite=${policy.sameSite}`,
     `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`,
   ];
-  if (process.env.NODE_ENV === 'production') parts.push('Secure');
+  if (policy.secure) parts.push('Secure');
   return parts.join('; ');
 }
 
@@ -72,7 +77,28 @@ async function requireEmployeeSession(req, res, next) {
   }
 }
 
+/**
+ * A browser that names an Origin must name one this deployment trusts.
+ *
+ * The CSRF token is the real defence. This is the second one, and it matters
+ * more now that the session cookie can be SameSite=None and so travels on
+ * requests started from other sites: CORS only stops a hostile page *reading*
+ * the response, not the request being made. A request with no Origin header is
+ * not a cross-site browser request, so it is left to the token.
+ */
+function originIsTrusted(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const normalised = String(origin).replace(/\/+$/, '');
+  if (allowedOrigins().includes(normalised)) return true;
+  // Same origin as this API (a page served by the API itself).
+  return normalised === `${req.protocol}://${req.get('host')}`;
+}
+
 function requireEmployeeCsrf(req, res, next) {
+  if (!originIsTrusted(req)) {
+    return res.status(403).json({ code: 'ORIGIN_NOT_ALLOWED', error: 'This request came from an origin that is not allowed.' });
+  }
   const csrf = req.headers['x-csrf-token'];
   if (!csrf || !req.employee?.csrfHash || !safeEqual(hashToken(csrf), req.employee.csrfHash)) {
     return res.status(403).json({ code: 'CSRF_FAILED', error: 'Invalid request token. Refresh and try again.' });
@@ -90,4 +116,5 @@ module.exports = {
   clearCookie,
   requireEmployeeSession,
   requireEmployeeCsrf,
+  originIsTrusted,
 };

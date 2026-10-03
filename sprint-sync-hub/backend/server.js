@@ -16,10 +16,8 @@ const PORT = process.env.PORT || 3001;
 
 // Dashboard is hosted separately from the API, so cross-origin is expected —
 // but restrict it to known origins instead of reflecting any caller.
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174')
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean);
+const { allowedOrigins: readAllowedOrigins } = require('./utils/allowedOrigins');
+const allowedOrigins = readAllowedOrigins();
 
 app.use(cors({
   credentials: true,
@@ -98,6 +96,13 @@ app.use((err, req, res, next) => {
 });
 
 async function boot() {
+  // 0. Employee session cookies. Resolved first so a bad EMPLOYEE_COOKIE_SAMESITE
+  // stops the boot, and so the choice — and any reason it may not work in the
+  // browser — is in the log where someone deploying will see it.
+  const cookiePolicy = require('./middleware/cookiePolicy').resolveCookiePolicy();
+  console.log(`[employee-auth] Session cookies: SameSite=${cookiePolicy.sameSite}${cookiePolicy.secure ? '; Secure' : ''} (${cookiePolicy.reason})`);
+  for (const warning of cookiePolicy.warnings) console.warn(`[employee-auth] ${warning}`);
+
   // 1. Connect to database
   await testConnection();
 
