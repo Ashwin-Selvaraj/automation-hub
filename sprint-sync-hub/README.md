@@ -150,3 +150,5 @@ cd backend
 railway login && railway init && railway up
 # Add all .env variables in Railway → Variables tab
 ```
+
+**Employee sign-in cookies.** If the dashboard and API are on different sites (a `*.vercel.app` frontend and a `*.railway.app` API are), the backend issues its sign-in cookies as `SameSite=None; Secure`, because a `Lax` cookie is neither sent on, nor accepted from, a cross-site request, and sign-in would fail. It says which it chose in the boot log. Safari and Firefox's strict mode block those cookies regardless, so the dependable setup is one shared domain, e.g. `app.example.com` and `api.example.com`, where the stricter `Lax` cookie is used. Set `CORS_ORIGINS` to the dashboard's exact origin either way. See `EMPLOYEE_COOKIE_SAMESITE` in `.env.example`.

@@ -15,7 +15,21 @@ The Overview checkout card is a reminder and validation flow, not an attendance 
 
 Employee endpoints return `NOT_CONNECTED`, `UPDATE_FOUND`, `UPDATE_MISSING`, or `SLACK_ERROR`. Provider failures are retryable and are not reported as missing updates.
 
-Required checkout settings are `FRONTEND_URL`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_TEAM_ID`, `SLACK_OIDC_REDIRECT_URI`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_OAUTH_REDIRECT_URI`, `ZOHO_ACCOUNTS_SERVER`, `ZOHO_CHECKOUT_URL`, `SLACK_CHANNEL_ID`, `TIMEZONE`, and `ENCRYPTION_KEY`. `SLACK_CHANNEL_URL` and `EMPLOYEE_SESSION_TTL_HOURS` are optional.
+Required checkout settings are `FRONTEND_URL`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_TEAM_ID`, `SLACK_OIDC_REDIRECT_URI`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_OAUTH_REDIRECT_URI`, `ZOHO_ACCOUNTS_SERVER`, `ZOHO_CHECKOUT_URL`, `SLACK_CHANNEL_ID`, `TIMEZONE`, and `ENCRYPTION_KEY`. `SLACK_CHANNEL_URL` and `EMPLOYEE_SESSION_TTL_HOURS` are optional. `EMPLOYEE_COOKIE_SAMESITE` is normally left unset.
+
+### Where the dashboard and API are hosted
+
+The employee session lives in an HttpOnly cookie, and whether a browser will send it depends on whether the dashboard and the API are the same *site* (registrable domain; ports are ignored).
+
+| Setup | Cookie | Notes |
+|---|---|---|
+| `app.example.com` + `api.example.com` | `SameSite=Lax` | Recommended. Works in every browser. |
+| `*.vercel.app` + `*.railway.app`, or any two unrelated domains | `SameSite=None; Secure` | Chosen automatically. Works in Chrome and Edge; Safari and Firefox's strict mode block third-party cookies, so sign-in can fail for those users. |
+| `localhost:5173` + `localhost:3001` | `SameSite=Lax`, not `Secure` | Local development. `localhost` + `127.0.0.1` count as different sites. |
+
+The backend compares `FRONTEND_URL` with the API host (from `SLACK_OIDC_REDIRECT_URI`) at boot and prints the choice. Set `EMPLOYEE_COOKIE_SAMESITE=lax` or `none` to override; any other value stops the server starting. Forcing `lax` on a split deployment is warned about, because sign-in then fails with "Missing OAuth callback data".
+
+Because a `None` cookie travels on requests started from other sites, state-changing employee requests are checked twice: the per-session CSRF token, and an `Origin` check against `CORS_ORIGINS`. A request naming an origin not on that list is refused with `ORIGIN_NOT_ALLOWED` even if its token is right.
 
 Zoho `location`, `accounts-server`, and `api_domain` metadata are retained per employee. Refresh and access tokens are AES-256-GCM encrypted with `ENCRYPTION_KEY`; token responses and secrets are never sent to the frontend. Revoked refresh tokens require reconnecting. The optional organization-wide Zoho attendance credential is separate and never proves that an employee connected.
 
