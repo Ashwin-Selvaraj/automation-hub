@@ -13,11 +13,11 @@ const attendanceService = require('../services/attendanceService');
 const zohoService       = require('../services/zohoService');
 const featureFlags      = require('../services/featureFlags');
 const { getOrgId } = require('../core/orgContext');
+const teamClock = require('../utils/teamClock');
 
 const DISABLED_RESPONSE = {
   configured: false,
   enabled:    false,
-  date:       new Date().toISOString().split('T')[0],
   message:    'Zoho attendance is disabled. Enable it in Settings.',
   present:    [],
   absent:     [],
@@ -31,7 +31,7 @@ const DISABLED_RESPONSE = {
 router.get('/today', async (req, res) => {
   try {
     const enabled = await featureFlags.isZohoAttendanceEnabled();
-    if (!enabled) return res.json({ ...DISABLED_RESPONSE, date: new Date().toISOString().split('T')[0] });
+    if (!enabled) return res.json({ ...DISABLED_RESPONSE, date: teamClock.today() });
 
     const data = await attendanceService.getTodayAttendance(getOrgId());
     res.json(data);

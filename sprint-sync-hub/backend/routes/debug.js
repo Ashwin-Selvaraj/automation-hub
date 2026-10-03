@@ -86,7 +86,7 @@ router.get('/zoho', async (req, res) => {
   // ── CHECK 5: Webhook-derived attendance rows for today ────────────────────────
   try {
     const { query } = require('../db');
-    const today = new Date().toISOString().split('T')[0];
+    const today = require('../utils/teamClock').today();
     const webhookRows = await query(
       `SELECT member_id, checked_in, check_in_time, checked_out, check_out_time
        FROM attendance_records

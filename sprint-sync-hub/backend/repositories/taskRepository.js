@@ -1,6 +1,7 @@
 'use strict';
 
 const db = require('../db');
+const teamClock = require('../utils/teamClock');
 
 const DONE_STATUSES = ['done', 'closed', 'resolved', 'complete', 'completed'];
 
@@ -142,7 +143,7 @@ async function markCompleted(taskId) {
   }
 }
 
-async function getOverdueTasks(organisationId, sprintId) {
+async function getOverdueTasks(organisationId, sprintId, today = teamClock.today()) {
   try {
     const { rows } = await db.query(
       `SELECT t.*, m.slack_user_id, m.name AS assignee_name, m.email AS assignee_email
@@ -150,10 +151,10 @@ async function getOverdueTasks(organisationId, sprintId) {
        LEFT JOIN members m ON t.assignee_id = m.id
        WHERE t.organisation_id = $1
          AND t.sprint_id = $2
-         AND t.due_date < CURRENT_DATE
+         AND t.due_date < $3::date
          AND t.completed_at IS NULL
        ORDER BY t.due_date ASC`,
-      [organisationId, sprintId]
+      [organisationId, sprintId, today]
     );
     return rows;
   } catch (err) {

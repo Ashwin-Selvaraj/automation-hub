@@ -431,7 +431,7 @@ If NO (single day update), respond with:
   "entries": null
 }
 
-Today's date for reference: ${new Date().toISOString().split('T')[0]}
+Today's date for reference: ${require('../utils/teamClock').today()}
 Only use confirmed dates from the message. Do not invent dates. Respond with JSON only.`,
       }],
     });

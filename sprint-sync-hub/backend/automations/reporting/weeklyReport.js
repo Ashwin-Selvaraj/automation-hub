@@ -9,6 +9,7 @@ const notifRepo          = require('../../repositories/notificationRepository');
 const sprintRepo         = require('../../repositories/sprintRepository');
 const memberRoleRepository = require('../../repositories/memberRoleRepository');
 const { getSprintWindow } = require('../../utils/dateUtils');
+const { todayInZone } = require('../../utils/dateOnly');
 const notifier   = require('../../core/notifier');
 const { weekly } = require('../schedule');
 
@@ -16,10 +17,6 @@ const { weekly } = require('../schedule');
  * Compiles the sprint's activity into a Claude-written summary, posts it to the
  * team channel, and sends the manager a copy.
  */
-
-function toDateStr(d) {
-  return d.toISOString().substring(0, 10);
-}
 
 async function run({ orgId, cfg }) {
   const { start, startStr, endStr } = getSprintWindow();
@@ -55,7 +52,7 @@ async function run({ orgId, cfg }) {
     'Full Sprint', memberActivity, jiraTasks, cfg.sprintName, { leaderboard, atRisk }
   );
 
-  const week = toDateStr(new Date());
+  const week = todayInZone(cfg.timezone);
   const posted = await notifier.postToChannel({
     orgId, channelId: cfg.channelId, text: report,
     dedupeKey: `weekly-report:channel:${week}`,

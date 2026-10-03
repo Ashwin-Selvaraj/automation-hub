@@ -2,6 +2,7 @@
 
 const db           = require('../db');
 const { encrypt, decrypt, mask } = require('./cryptoService');
+const { dateInZone } = require('../utils/timeZone');
 
 // ─── Config key definitions ───────────────────────────────────────────────────
 // Maps logical key → { category, label, isSecret, envVar, default }
@@ -23,7 +24,7 @@ const CONFIG_DEFS = {
 
   // Sprint
   'sprint.name':          { category: 'sprint',   label: 'Sprint Name',             isSecret: false, envVar: 'SPRINT_NAME',            default: 'Sprint 1' },
-  'sprint.start_date':    { category: 'sprint',   label: 'Sprint Start Date',       isSecret: false, envVar: 'SPRINT_START_DATE',      default: new Date().toISOString().split('T')[0] },
+  'sprint.start_date':    { category: 'sprint',   label: 'Sprint Start Date',       isSecret: false, envVar: 'SPRINT_START_DATE',      default: dateInZone(new Date(), process.env.TIMEZONE || 'Asia/Kolkata') },
   'sprint.duration_weeks':{ category: 'sprint',   label: 'Sprint Duration (weeks)', isSecret: false, envVar: 'SPRINT_DURATION_WEEKS',  default: '2' },
 
   // Schedule
@@ -156,7 +157,7 @@ function getSprintConfig() {
 
   return {
     sprintName:     getSync('sprint.name')          || 'Sprint 1',
-    startDate:      getSync('sprint.start_date')     || new Date().toISOString().split('T')[0],
+    startDate:      getSync('sprint.start_date')     || dateInZone(new Date(), getSync('schedule.timezone') || 'Asia/Kolkata'),
     durationWeeks:  parseInt(getSync('sprint.duration_weeks') || '2', 10),
     projectKey:     getSync('jira.project_key')      || '',
     channelId:      getSync('slack.channel_id')      || '',

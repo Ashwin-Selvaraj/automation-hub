@@ -11,6 +11,7 @@ const sprintRepo         = require('../../repositories/sprintRepository');
 const auditLog           = require('../../core/auditLog');
 const notifier           = require('../../core/notifier');
 const { onDays, parseTime } = require('../schedule');
+const { dayWindow } = require('../../utils/timeZone');
 
 /**
  * End-of-day nudge for anyone who has not posted a standup, or posted one that
@@ -22,14 +23,9 @@ const { onDays, parseTime } = require('../schedule');
  * genuinely wants the reminder can switch it back on.
  */
 
-function toDateStr(d) {
-  return d.toISOString().substring(0, 10);
-}
-
 async function run({ orgId, cfg }) {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const today = toDateStr(new Date());
+  // The team's day, from its own midnight — not the server's.
+  const { date: today, start: todayStart } = dayWindow(new Date(), cfg.timezone);
 
   const messages = await slackService.getChannelMessages(
     cfg.channelId, todayStart.getTime() / 1000, Date.now() / 1000

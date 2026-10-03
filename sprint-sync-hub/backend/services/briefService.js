@@ -9,7 +9,7 @@ const prReviewService = require('./prReviewService');
 const slackText = require('../utils/slackText');
 const claudeService = require('./claudeService');
 const { getSprintWindow } = require('../utils/dateUtils');
-const { dateOnlyString, todayInZone } = require('../utils/dateOnly');
+const { dateOnlyString, todayInZone, addDays } = require('../utils/dateOnly');
 const configService = require('./configService');
 
 /**
@@ -30,15 +30,7 @@ const configService = require('./configService');
 const STALE_DAYS    = 3;
 const DUE_SOON_DAYS = 2;
 
-function toDateStr(d) {
-  return d.toISOString().substring(0, 10);
-}
-
-function yesterdayOf(date) {
-  const d = new Date(`${date}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return toDateStr(d);
-}
+const yesterdayOf = (date) => addDays(date, -1);
 
 /** Working days left in the sprint, counting today. Both dates are YYYY-MM-DD. */
 function workingDaysRemaining(endDate, todayStr) {
@@ -80,8 +72,8 @@ async function collect(organisationId, {
   ] = await Promise.all([
     briefRepo.standupsOn(organisationId, today),
     briefRepo.silentOn(organisationId, today),
-    briefRepo.overdueTasks(organisationId, sprintId),
-    briefRepo.dueSoon(organisationId, sprintId, DUE_SOON_DAYS),
+    briefRepo.overdueTasks(organisationId, sprintId, today),
+    briefRepo.dueSoon(organisationId, sprintId, DUE_SOON_DAYS, today),
     briefRepo.staleInProgress(organisationId, sprintId, STALE_DAYS),
     briefRepo.openMismatches(organisationId, yesterdayOf(today)),
     briefRepo.sprintProgress(organisationId, sprintId),

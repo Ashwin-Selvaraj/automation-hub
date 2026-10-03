@@ -132,3 +132,21 @@ test('the checker itself would catch the bug it exists for', () => {
   assert.ok(found.some((p) => /target\.imaginary\(\)/.test(p)));
   assert.ok(found.some((p) => /alsoMissing/.test(p)));
 });
+
+test('every repository or service a file calls into is imported there', () => {
+  // The Phase 3 clean-up deleted an endpoint from routes/checkout.js together
+  // with the import that its sibling endpoint still used, and the checkout
+  // history page returned 500 until a test happened to call it. A name used as
+  // `somethingRepo.method(` or `somethingService.method(` must be declared in the
+  // same file.
+  const problems = [];
+  for (const file of sourceFiles(ROOT)) {
+    const src = stripComments(fs.readFileSync(file, 'utf8'));
+    const used = new Set([...src.matchAll(/\b([a-z]\w*(?:Repo|Repository|Service))\.\w+\(/g)].map((m) => m[1]));
+    for (const name of used) {
+      const declared = new RegExp(`(?:const|let|var)\\s+(?:\\{[^}]*\\b${name}\\b[^}]*\\}|${name})\\s*=|function\\s+${name}\\b`).test(src);
+      if (!declared) problems.push(`${path.relative(ROOT, file)}: uses ${name}, which it never declares`);
+    }
+  }
+  assert.deepEqual(problems, [], `\n${problems.join('\n')}\n`);
+});

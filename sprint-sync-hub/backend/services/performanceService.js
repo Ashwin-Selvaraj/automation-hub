@@ -11,7 +11,8 @@ const memberRoleRepository = require('../repositories/memberRoleRepository');
 const scoringService       = require('./scoringService');
 const { getSprintConfig }  = require('../services/configService');
 const auditLog = require('../core/auditLog');
-const { dateOnlyString } = require('../utils/dateOnly');
+const { dateOnlyString, daysBetween, workingDatesBetween } = require('../utils/dateOnly');
+const teamClock = require('../utils/teamClock');
 const { getOrgId } = require('../core/orgContext');
 
 /**
@@ -31,30 +32,9 @@ async function shouldSendTaskDM(memberId) {
   }
 }
 
-function toDateStr(d) {
-  if (!d) return null;
-  if (typeof d === 'string') return d.substring(0, 10);
-  return d.toISOString().substring(0, 10);
-}
-
-function workingDaysInRange(startDate, endDate) {
-  const start = new Date(startDate);
-  const end   = new Date(endDate);
-  let count = 0;
-  const cur = new Date(start);
-  while (cur <= end) {
-    const day = cur.getDay();
-    if (day !== 0 && day !== 6) count++;
-    cur.setDate(cur.getDate() + 1);
-  }
-  return count;
-}
-
-function workingDaysUntilToday(startDate) {
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
-  return workingDaysInRange(startDate, today);
-}
+// Reads a pg DATE with local components (see utils/dateOnly); toISOString() would
+// give the previous day on a server east of UTC.
+const toDateStr = dateOnlyString;
 
 function computeStreaks(dailyPosts, expectedDates) {
   // expectedDates: array of 'YYYY-MM-DD' strings (working days)
@@ -81,17 +61,9 @@ function computeStreaks(dailyPosts, expectedDates) {
   return { currentStreak, maxStreak };
 }
 
+/** Working dates from `startDate` through `endDate` inclusive, on the team's working days. */
 function getWorkingDaysList(startDate, endDate) {
-  const days = [];
-  const cur = new Date(startDate);
-  const end = new Date(endDate);
-  end.setHours(23, 59, 59, 999);
-  while (cur <= end) {
-    const day = cur.getDay();
-    if (day !== 0 && day !== 6) days.push(toDateStr(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return days;
+  return workingDatesBetween(startDate, endDate, teamClock.workdays());
 }
 
 async function syncMemberStandup(organisationId, sprintId, slackMessage) {
@@ -104,7 +76,8 @@ async function syncMemberStandup(organisationId, sprintId, slackMessage) {
   const email = memberCfg?.email || null;
 
   const member = await memberRepo.findOrCreate(organisationId, slackUserId, name, email);
-  const postDate = toDateStr(new Date(parseFloat(slackMessage.ts) * 1000));
+  // The day in the team's zone: a standup posted at 01:00 IST belongs to that day, not UTC's.
+  const postDate = teamClock.dateOf(new Date(parseFloat(slackMessage.ts) * 1000));
 
   const standupPost = await standupRepo.recordPost(
     organisationId, sprintId, member.id,
@@ -119,7 +92,7 @@ async function syncMemberStandup(organisationId, sprintId, slackMessage) {
   // Update current standup streak in overall stats
   const overall = await statsRepo.getOverallStats(member.id, organisationId) || {};
   const sprint = await sprintRepo.findById(sprintId);
-  const allDays = sprint ? getWorkingDaysList(sprint.start_date, new Date()) : [];
+  const allDays = sprint ? getWorkingDaysList(sprint.start_date, teamClock.today()) : [];
   const posts = await standupRepo.getPostsForMemberInSprint(member.id, sprintId);
   const { currentStreak, maxStreak } = computeStreaks(posts, allDays);
 
@@ -159,17 +132,15 @@ async function recordJiraSync(organisationId, sprintId, memberId, taskId, fromSt
 
     const deadlineEvent = await deadlineRepo.findByTaskId(taskId);
     if (deadlineEvent) {
-      const today = toDateStr(new Date());
+      const today = teamClock.today();
       const dueDate = toDateStr(deadlineEvent.due_date);
-      const daysOverdue = today > dueDate
-        ? Math.floor((new Date(today) - new Date(dueDate)) / 86400000)
-        : 0;
+      const daysOverdue = today > dueDate ? daysBetween(dueDate, today) : 0;
       const status = today <= dueDate ? 'hit' : 'missed';
       await deadlineRepo.updateStatus(deadlineEvent.id, status, today, daysOverdue);
     }
   }
 
-  const today = toDateStr(new Date());
+  const today = teamClock.today();
   await statsRepo.upsertDailyStats(organisationId, sprintId, memberId, today, {
     tasks_completed:     isDone ? 1 : 0,
     tasks_moved_forward: isDone ? 0 : 1,
@@ -180,7 +151,7 @@ async function recordJiraSync(organisationId, sprintId, memberId, taskId, fromSt
 async function recordNoMatchDM(organisationId, sprintId, memberId, slackMessageTs) {
   try {
     await notifRepo.recordNotification(organisationId, memberId, 'no_match_dm', 'dm', null);
-    const today = toDateStr(new Date());
+    const today = teamClock.today();
     await statsRepo.upsertDailyStats(organisationId, sprintId, memberId, today, {
       no_match_dms_received: 1,
     });
@@ -203,19 +174,19 @@ async function recordNoMatchDM(organisationId, sprintId, memberId, slackMessageT
 async function recordDeadlineMisses(organisationId, sprintId) {
   let overdueTasks = [];
   try {
-    overdueTasks = await taskRepo.getOverdueTasks(organisationId, sprintId);
+    overdueTasks = await taskRepo.getOverdueTasks(organisationId, sprintId, teamClock.today());
   } catch (err) {
     console.error('[performanceService.recordDeadlineMisses] getOverdueTasks:', err.message);
     return;
   }
 
-  const today = toDateStr(new Date());
+  const today = teamClock.today();
 
   for (const task of overdueTasks) {
     try {
       if (!task.assignee_id) continue;
 
-      const daysOverdue = Math.floor((new Date() - new Date(task.due_date)) / 86400000);
+      const daysOverdue = Math.max(0, daysBetween(toDateStr(task.due_date), today));
 
       const existing = await deadlineRepo.findByTaskId(task.id);
       if (!existing) {
@@ -240,8 +211,8 @@ async function computeSprintSummary(organisationId, sprintId, memberId) {
   const sprint = await sprintRepo.findById(sprintId);
   if (!sprint) return null;
 
-  const today = new Date();
-  const sprintEnd = new Date(sprint.end_date);
+  const today = teamClock.today();
+  const sprintEnd = toDateStr(sprint.end_date);
   const effectiveEnd = today < sprintEnd ? today : sprintEnd;
 
   const allWorkingDays = getWorkingDaysList(sprint.start_date, effectiveEnd);

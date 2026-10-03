@@ -12,6 +12,8 @@ const statsRepo             = require('../repositories/statsRepository');
 const memberRoleRepository  = require('../repositories/memberRoleRepository');
 const auditLog = require('../core/auditLog');
 const { getOrgId } = require('../core/orgContext');
+const teamClock = require('../utils/teamClock');
+const { dateOnlyString, workingDatesBetween } = require('../utils/dateOnly');
 
 const MODEL = 'claude-opus-4-8';
 
@@ -25,16 +27,9 @@ function getAnthropicClient() {
   return _anthropic;
 }
 
+/** Working days in a sprint, inclusive, on the team's working days (Monday-Friday by default). */
 function countWorkingDays(startDate, endDate) {
-  let count = 0;
-  const cur = new Date(startDate);
-  const end = new Date(endDate);
-  while (cur <= end) {
-    const dow = cur.getDay();
-    if (dow !== 0 && dow !== 6) count++;
-    cur.setDate(cur.getDate() + 1);
-  }
-  return count;
+  return workingDatesBetween(startDate, endDate, teamClock.workdays()).length;
 }
 
 // ─── Domain detection ─────────────────────────────────────────────────────────
@@ -307,7 +302,7 @@ async function getCarryoverCandidates(organisationId) {
   if (!previousSprint) return { previousSprint: null, tasks: [] };
 
   const incomplete = await taskRepo.getIncompleteTasksBySprint(previousSprint.id);
-  const today = new Date().toISOString().split('T')[0];
+  const today = teamClock.today();
 
   const tasks = incomplete.map((t) => ({
     taskId:       t.id,
@@ -319,7 +314,7 @@ async function getCarryoverCandidates(organisationId) {
     dueDate:      t.due_date,
     assigneeId:   t.assignee_id,
     assigneeName: t.assignee_name || null,
-    overdue:      t.due_date ? String(t.due_date).split('T')[0] < today : false,
+    overdue:      t.due_date ? dateOnlyString(t.due_date) < today : false,
   }));
 
   return {

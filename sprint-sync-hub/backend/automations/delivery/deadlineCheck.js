@@ -165,7 +165,7 @@ async function run({ orgId, cfg }) {
   if (sprint) {
     // Bookkeeping that feeds the performance score; sends nothing.
     await performanceService.recordDeadlineMisses(orgId, sprint.id);
-    const rows = await taskRepo.getOverdueTasks(orgId, sprint.id);
+    const rows = await taskRepo.getOverdueTasks(orgId, sprint.id, today);
     items = rows
       .filter((r) => r.assignee_id && dateOnlyString(r.due_date))
       .map((r) => ({

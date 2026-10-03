@@ -2,6 +2,8 @@
 
 require('dotenv').config();
 const axios = require('axios');
+const teamClock = require('../utils/teamClock');
+const { daysBetween, dateOnlyString } = require('../utils/dateOnly');
 
 /**
  * Returns a configured axios instance for Jira REST API v3.
@@ -261,16 +263,14 @@ async function transitionIssue(issueKey, statusName) {
 async function getOverdueIssues(projectKey) {
   try {
     const client = getClient();
-    const today = new Date().toISOString().split('T')[0];
+    const today = teamClock.today();
     const jql = `project = "${projectKey}" AND duedate < "${today}" AND status != Done ORDER BY duedate ASC`;
     const res = await client.get('/search/jql', {
       params: { jql, maxResults: 50, fields: 'summary,status,assignee,duedate,priority' },
     });
 
-    const now = Date.now();
     return (res.data.issues || []).map((issue) => {
-      const dueMs = new Date(issue.fields.duedate).getTime();
-      const daysOverdue = Math.floor((now - dueMs) / (1000 * 60 * 60 * 24));
+      const daysOverdue = Math.max(0, daysBetween(dateOnlyString(issue.fields.duedate), today));
       return {
         key: issue.key,
         summary: issue.fields.summary,

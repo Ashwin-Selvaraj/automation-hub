@@ -4,6 +4,7 @@ const prReviewService = require('../../services/prReviewService');
 const notifier        = require('../../core/notifier');
 const slackText       = require('../../utils/slackText');
 const { onDays }      = require('../schedule');
+const { todayInZone } = require('../../utils/dateOnly');
 
 /**
  * One message to each person who owes reviews, listing what is waiting on them.
@@ -27,10 +28,6 @@ const { onDays }      = require('../schedule');
  * waits appear in the daily brief.
  */
 
-function toDateStr(d) {
-  return d.toISOString().substring(0, 10);
-}
-
 /** Builds the digest for one reviewer. Pure, so the wording can be tested. */
 function buildDigest(name, items) {
   const first = String(name || '').trim().split(/\s+/)[0] || 'there';
@@ -52,7 +49,7 @@ function buildDigest(name, items) {
   ].join('\n');
 }
 
-async function run({ orgId }) {
+async function run({ orgId, cfg }) {
   // This runs on a schedule and sends messages, so it insists on current data
   // and is willing to wait for it.
   const assessment = await prReviewService.assessWithin(orgId, { maxAgeMs: 0, budgetMs: 60_000 });
@@ -71,7 +68,7 @@ async function run({ orgId }) {
     byMember.get(e.member.id).items.push(e);
   }
 
-  const today = toDateStr(new Date());
+  const today = todayInZone(cfg.timezone);
   let sent = 0;
   let heldOrDuplicate = 0;
 

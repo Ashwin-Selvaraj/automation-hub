@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { workingDatesBetween } = require('./dateOnly');
 
 /**
  * Returns the current sprint window dates based on env config.
@@ -44,23 +45,14 @@ function getSprintWeeks() {
 }
 
 /**
- * Counts Mon–Fri working days since the given date up to today.
+ * Counts working days from the given date up to and including today, in the
+ * team's timezone and on the team's working days.
  * @param {string} dateStr - YYYY-MM-DD
  * @returns {number}
  */
 function getWorkingDaysSince(dateStr) {
-  const start = new Date(dateStr + 'T00:00:00.000Z');
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-
-  let count = 0;
-  const cursor = new Date(start);
-  while (cursor <= today) {
-    const day = cursor.getUTCDay();
-    if (day >= 1 && day <= 5) count++;
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return count;
+  const teamClock = require('./teamClock');
+  return workingDatesBetween(dateStr, teamClock.today(), teamClock.workdays()).length;
 }
 
 module.exports = { getSprintWindow, getSprintWeeks, getWorkingDaysSince };

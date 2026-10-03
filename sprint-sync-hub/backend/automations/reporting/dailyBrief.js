@@ -3,6 +3,7 @@
 const briefService = require('../../services/briefService');
 const notifier     = require('../../core/notifier');
 const { onDays }   = require('../schedule');
+const { todayInZone } = require('../../utils/dateOnly');
 
 /**
  * One message to the lead each morning, replacing five that went to the team.
@@ -15,10 +16,6 @@ const { onDays }   = require('../schedule');
  * It goes to TEAM_LEAD_SLACK_ID, falling back to the configured manager. If
  * neither is set the automation does nothing rather than guessing a recipient.
  */
-
-function toDateStr(d) {
-  return d.toISOString().substring(0, 10);
-}
 
 async function run({ orgId, cfg }) {
   const recipient = process.env.TEAM_LEAD_SLACK_ID || cfg.managerSlackId;
@@ -35,7 +32,7 @@ async function run({ orgId, cfg }) {
     orgId,
     slackUserId: recipient,
     text,
-    dedupeKey: `daily-brief:${recipient}:${toDateStr(new Date())}`,
+    dedupeKey: `daily-brief:${recipient}:${todayInZone(cfg.timezone)}`,
     type: 'daily_brief',
     action: 'Daily brief sent to lead',
     // A scheduled brief should arrive at the time it was scheduled for, even if
